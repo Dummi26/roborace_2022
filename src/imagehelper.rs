@@ -1,5 +1,26 @@
 use image::{DynamicImage, io::Reader as ImageReader};
 
+pub struct ImageKeeper {
+    pub image_err_missing_ultraschallsensor: PotImage,
+}
+impl ImageKeeper {
+    pub fn new() -> Self { Self {
+        image_err_missing_ultraschallsensor:
+            PotImage::new("/home/robot/school/assets/ultraschallsensor_missing.png"),
+    } }
+    pub fn get_err_missing_dev(&mut self, dev: &crate::roboter::Device) -> Option<&mut DynamicImage> {
+        match dev {
+            crate::roboter::Device::LargeMotor1 => self.image_err_missing_ultraschallsensor.get(),
+            crate::roboter::Device::LargeMotor2 => self.image_err_missing_ultraschallsensor.get(),
+            crate::roboter::Device::MediumMotor => self.image_err_missing_ultraschallsensor.get(),
+            crate::roboter::Device::ColorSensor => self.image_err_missing_ultraschallsensor.get(),
+            crate::roboter::Device::GyroSensor => self.image_err_missing_ultraschallsensor.get(),
+            crate::roboter::Device::TouchSensor => self.image_err_missing_ultraschallsensor.get(),
+            crate::roboter::Device::UltrasonicSensor => self.image_err_missing_ultraschallsensor.get(),
+        }
+    }
+}
+
 pub fn read_image_from_file<P>(path: P) -> Result<DynamicImage, ReadImageFromFileError> where P: AsRef<std::path::Path> {
     match ImageReader::open(path) {
         Ok(reader) => match reader.decode() {

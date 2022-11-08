@@ -53,7 +53,7 @@ impl super::ThreadedFeature for Thread {
             sensor_distance,
             #[cfg(not(feature="pc_test"))]
             sensor_touch,
-            sleep_duration: Duration::from_millis(4), // max: 250Hz
+            sleep_duration: Duration::from_millis(20), // max: 50Hz
             #[cfg(feature="pc_test")]
             virtual_robot: robot.pc_test_thread.1.clone(),
         })
@@ -96,11 +96,22 @@ impl Thread {
                 }
             }
             let dist = self.read_distance_sensor()?;
-            println!("{:.1}cm", dist);
+            // println!("{:.1}cm", dist);
             if dist < 50.0 {
                 _ = self.send_to_linienfolger.send(LfTask::SwitchToLane(Lane::Left));
+                let delay = Duration::from_secs_f32(0.25);
+                loop {
+                    thread::sleep(delay);
+                    let (s, r) = std::sync::mpsc::channel();
+                    _ = self.send_to_linienfolger.send(LfTask::GetState(s));
+                    match r.recv().unwrap() {
+                        crate::roboter::linienfolger::LinienfolgerState::Stopped |
+                        crate::roboter::linienfolger::LinienfolgerState::Following(_) => break,
+                        crate::roboter::linienfolger::LinienfolgerState::Switching(..) => continue,
+                    }
+                }
+                println!("Passed the obstacle.");
             }
-            thread::sleep(Duration::from_secs(1)); // TODO: implement
             thread::sleep(self.sleep_duration);
         };
     }

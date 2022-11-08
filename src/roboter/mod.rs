@@ -1,6 +1,6 @@
 use std::{sync::mpsc, thread, time::Duration};
 
-use ev3dev_lang_rust::{motors::{LargeMotor, MediumMotor}, sensors::{ColorSensor, TouchSensor, UltrasonicSensor}};
+use ev3dev_lang_rust::{motors::{LargeMotor, MediumMotor}, sensors::{ColorSensor, GyroSensor, TouchSensor, UltrasonicSensor}};
 
 pub mod linienfolger;
 pub mod erkennung;
@@ -19,6 +19,7 @@ pub struct Robot {
     pub motor_l1: Option<LargeMotor>,
     pub motor_l2: Option<LargeMotor>,
     pub motor_med: Option<MediumMotor>,
+    pub sensor_gyro: Option<GyroSensor>,
     pub sensor_color: Option<ColorSensor>,
     pub sensor_ultraschall: Option<UltrasonicSensor>,
     pub sensor_touch: Option<TouchSensor>,
@@ -69,6 +70,7 @@ impl Robot {
             sensor_color: ColorSensor::find().ok(),
             sensor_ultraschall: UltrasonicSensor::find().ok(),
             sensor_touch: TouchSensor::find().ok(),
+            sensor_gyro: GyroSensor::find().ok(),
             #[cfg(feature="pc_test")]
             pc_test_thread: crate::test::virtual_robot::VirtualRobot::new(pc_test_robot.clone()),
             #[cfg(feature="pc_test")]
@@ -146,7 +148,24 @@ pub enum Device {
     LargeMotor2,
     MediumMotor,
     ColorSensor,
+    GyroSensor,
+    TouchSensor,
     UltrasonicSensor,
+}
+impl From<&linienfolger::Device> for Device {
+    fn from(dev: &linienfolger::Device) -> Self { match dev {
+        linienfolger::Device::LargeMotor1 => Self::LargeMotor1,
+        linienfolger::Device::LargeMotor2 => Self::LargeMotor2,
+        linienfolger::Device::MediumMotor => Self::MediumMotor,
+        linienfolger::Device::ColorSensor => Self::ColorSensor,
+        linienfolger::Device::GyroSensor => Self::GyroSensor,
+    } }
+}
+impl From<&erkennung::Device> for Device  {
+    fn from(dev: &erkennung::Device) -> Self { match dev {
+        erkennung::Device::TouchSensor => Self::TouchSensor,
+        erkennung::Device::UltrasonicSensor => Self::UltrasonicSensor,
+    } }
 }
 
 pub enum ThreadState {

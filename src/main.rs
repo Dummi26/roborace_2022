@@ -17,7 +17,7 @@ mod imagehelper;
 
 fn main() {
     let mut screen = Screen::new();
-    let mut image_err_missing_ultraschallsensor = imagehelper::PotImage::new("/home/robot/school/assets/ultraschallsensor_missing.png");
+    let mut image_keeper = imagehelper::ImageKeeper::new();
     loop {
         let mut robot = None;
         #[cfg(feature="pc_test")]
@@ -53,16 +53,11 @@ fn main() {
                     if let Ok(screen) = &mut screen {
                         let img = match &e {
                             CustomError::FailedToInitializeLinienfolger(e) => match e {
-                                roboter::linienfolger::InitError::MissingDevice(dev) => match dev { // TODO!
-                                    roboter::linienfolger::Device::LargeMotor1 => image_err_missing_ultraschallsensor.get(),
-                                    roboter::linienfolger::Device::LargeMotor2 => image_err_missing_ultraschallsensor.get(),
-                                    roboter::linienfolger::Device::MediumMotor => image_err_missing_ultraschallsensor.get(),
-                                    roboter::linienfolger::Device::ColorSensor => image_err_missing_ultraschallsensor.get(),
-                                },
+                                roboter::linienfolger::InitError::MissingDevice(dev) => image_keeper.get_err_missing_dev(&dev.into()),
                             },
                             CustomError::FailedToInitializeErkennung(e) => match e {
-                                roboter::erkennung::InitError::MissingDevice(dev) => image_err_missing_ultraschallsensor.get(),
-                                roboter::erkennung::InitError::LinienfolgerUnavailable => image_err_missing_ultraschallsensor.get(),
+                                roboter::erkennung::InitError::MissingDevice(dev) => image_keeper.get_err_missing_dev(&dev.into()),
+                                roboter::erkennung::InitError::LinienfolgerUnavailable => image_keeper.image_err_missing_ultraschallsensor.get(),
                             },
                         };
                         if let Some(img) = img {

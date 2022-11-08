@@ -1,6 +1,6 @@
 use std::{sync::mpsc, thread, time::Duration};
 
-use ev3dev_lang_rust::{motors::{LargeMotor, MediumMotor}, sensors::{ColorSensor, UltrasonicSensor}};
+use ev3dev_lang_rust::{motors::{LargeMotor, MediumMotor}, sensors::{ColorSensor, GyroSensor}};
 
 use super::Robot;
 
@@ -13,20 +13,14 @@ pub struct Thread {
     pub max_number_of_retries_on_communication_failure: (u32, Duration),
     #[cfg(not(feature="pc_test"))]
     pub motor_l1: LargeMotor,
-    #[cfg(feature="pc_test")]
-    pub motor_l1: (),
     #[cfg(not(feature="pc_test"))]
     pub motor_l2: LargeMotor,
-    #[cfg(feature="pc_test")]
-    pub motor_l2: (),
     #[cfg(not(feature="pc_test"))]
     pub motor_med: MediumMotor,
-    #[cfg(feature="pc_test")]
-    pub motor_med: (),
     #[cfg(not(feature="pc_test"))]
     pub sensor_color: ColorSensor,
-    #[cfg(feature="pc_test")]
-    pub sensor_color: (),
+    #[cfg(not(feature="pc_test"))]
+    pub sensor_gyro: GyroSensor,
     sleep_duration: Duration,
     old_state: Option<LinienfolgerState>,
     current_state: LinienfolgerState,
@@ -39,13 +33,9 @@ pub struct Thread {
 impl super::ThreadedFeature for Thread {
     type InitError = InitError;
     fn init(robot: &mut Robot) -> Result<Self, InitError> {
-        #[cfg(feature="pc_test")]
-        let motor_l1 = ();
         #[cfg(not(feature="pc_test"))]
         let motor_l1 = match robot.motor_l1.take() { Some(v) => v, None => {
             return Err(InitError::MissingDevice(Device::LargeMotor1)); } };
-        #[cfg(feature="pc_test")]
-        let motor_l2 = ();
         #[cfg(not(feature="pc_test"))]
         let motor_l2 = match robot.motor_l2.take() { Some(v) => v, None => {
             robot.motor_l1 = Some(motor_l1);
@@ -55,16 +45,19 @@ impl super::ThreadedFeature for Thread {
             robot.motor_l1 = Some(motor_l1);
             robot.motor_l2 = Some(motor_l2);
             return Err(InitError::MissingDevice(Device::MediumMotor)); } };
-        #[cfg(feature="pc_test")]
-        let motor_med = ();
         #[cfg(not(feature="pc_test"))]
         let sensor_color = match robot.sensor_color.take() { Some(v) => v, None => {
             robot.motor_l1 = Some(motor_l1);
             robot.motor_l2 = Some(motor_l2);
             robot.motor_med = Some(motor_med);
             return Err(InitError::MissingDevice(Device::ColorSensor)); } };
-        #[cfg(feature="pc_test")]
-        let sensor_color = ();
+        #[cfg(not(feature="pc_test"))]
+        let sensor_gyro = match robot.sensor_gyro.take() { Some(v) => v, None => {
+            robot.motor_l1 = Some(motor_l1);
+            robot.motor_l2 = Some(motor_l2);
+            robot.motor_med = Some(motor_med);
+            robot.sensor_color = Some(sensor_color);
+            return Err(InitError::MissingDevice(Device::GyroSensor)); } };
         #[cfg(not(feature="pc_test"))] {
             match sensor_color.set_mode_col_reflect() {
                 Ok(()) => {},
@@ -94,10 +87,16 @@ impl super::ThreadedFeature for Thread {
             sender,
             receiver,
             max_number_of_retries_on_communication_failure: robot.max_number_of_retries_on_communication_failure.clone(),
+            #[cfg(not(feature="pc_test"))]
             motor_l1,
+            #[cfg(not(feature="pc_test"))]
             motor_l2,
+            #[cfg(not(feature="pc_test"))]
             motor_med,
+            #[cfg(not(feature="pc_test"))]
             sensor_color,
+            #[cfg(not(feature="pc_test"))]
+            sensor_gyro,
             sleep_duration: Duration::from_millis(4), // max: 250Hz
             old_state: None,
             current_state: LinienfolgerState::Following(Lane::Center),
@@ -132,6 +131,23 @@ impl Thread {
     fn read_color_sensor(&self) -> Result<i32, StopReason> {
         let (s, r) = std::sync::mpsc::channel();
         self.virtual_robot.send(VirtualRequest::ColorSensorBrightness(s)).expect("Robot channel broke.");
+        Ok(r.recv().expect("Answer channel broke."))
+    }
+
+    /// (in deg) https://docs.ev3dev.org/projects/lego-linux-drivers/en/ev3dev-jessie/sensor_data.html#lego-ev3-gyro
+    #[cfg(not(feature="pc_test"))]
+    fn read_gyro_sensor(&self) -> Result<i32, StopReason> {
+        let mut retries = 0;
+        Ok(loop {
+            match self.sensor_gyro.get_angle() { Ok(v) => break v, Err(_) => if retries < self.max_number_of_retries_on_communication_failure.0 {
+                retries += 1; thread::sleep(self.max_number_of_retries_on_communication_failure.1);
+            } else { return Err(StopReason::DeviceFailedToRespond(Device::GyroSensor)) }, };
+        })
+    }
+    #[cfg(feature="pc_test")]
+    fn read_gyro_sensor(&self) -> Result<i32, StopReason> {
+        let (s, r) = std::sync::mpsc::channel();
+        self.virtual_robot.send(VirtualRequest::GetGyroSensorDirection(s)).expect("Robot channel broke.");
         Ok(r.recv().expect("Answer channel broke."))
     }
 
@@ -211,7 +227,7 @@ impl Thread {
     }
 
     fn run_sync(&mut self) -> Result<(), StopReason> {
-        let right_side_of_line_mode = match {
+        let mut right_side_of_line_mode = match {
             self.stop_motors();
             let max_angle_deg = 42.5;
             thread::sleep(Duration::from_secs_f64(0.3));
@@ -290,9 +306,10 @@ impl Thread {
                         self.set_state(LinienfolgerState::Switching(old_lane, lane, 0.0));
                     },
                     Task::GetLane(sender) => _ = sender.send(self.target_lane.clone()),
+                    Task::GetState(sender) => _ = sender.send(self.current_state.clone()),
                 }
             }
-
+            let mut new_state = None;
             match &self.current_state {
                 LinienfolgerState::Stopped => return Err(StopReason::GracefullyStoppedForInternalReasons()),
                 LinienfolgerState::Following(lane) => {
@@ -344,46 +361,73 @@ impl Thread {
                         switching_start_angle =
                             match (prev_lane, target_lane) {
                                 (Lane::Left, Lane::Left) => 0.0,
-                                (Lane::Left, Lane::Center) => 30.0,
-                                (Lane::Left, Lane::Right) => 30.0,
-                                (Lane::Center, Lane::Left) => -30.0,
+                                (Lane::Left, Lane::Center) => 10.0,
+                                (Lane::Left, Lane::Right) => 10.0,
+                                (Lane::Center, Lane::Left) => -10.0,
                                 (Lane::Center, Lane::Center) => 0.0,
-                                (Lane::Center, Lane::Right) => 30.0,
-                                (Lane::Right, Lane::Left) => -30.0,
-                                (Lane::Right, Lane::Center) => -30.0,
+                                (Lane::Center, Lane::Right) => 10.0,
+                                (Lane::Right, Lane::Left) => -10.0,
+                                (Lane::Right, Lane::Center) => -10.0,
                                 (Lane::Right, Lane::Right) => 0.0,
                             }
                         ;
-                        self.set_steering_angle(switching_start_angle)?;
+                        if switching_start_angle == 0.0 {
+                            new_state = Some(LinienfolgerState::Following(target_lane.clone()));
+                        } else {
+                            self.set_steering_angle(switching_start_angle)?;
+                        }
                     }
-                    let elapsed_seconds = switching_start_time.elapsed().as_secs_f64();
-                    println!("Switching State: {}", switching_state);
-                    match &switching_state {
+                    let elapsed_seconds = switching_start_time.elapsed().as_secs_f32();
+                    // println!("switching_state: {}", switching_state);
+                    let steer = match &switching_state {
                         0 => {
-                            if elapsed_seconds >= 0.5 {
+                            //                    TODO/NOTE: This value depends on the robot's speed!
+                            let elapsed = (elapsed_seconds / 0.75).min(1.0);
+                            if elapsed >= 1.0 {
                                 self.set_steering_angle(0.0)?;
                                 switching_state += 1;
+                                Some(switching_start_angle * 0.2)
+                            } else {
+                                Some(switching_start_angle * (1.0 - 0.8 * elapsed))
                             }
                         },
                         1 => {
-                            if elapsed_seconds >= 1.0 && self.read_color_sensor()? < 60 {
-                                self.set_steering_angle(-switching_start_angle)?;
-                                switching_start_time = std::time::Instant::now();
-                                switching_state += 1;
+                            let brightness = self.read_color_sensor()?;
+                            if brightness < 60 { // encountered a black line
+                                if brightness < 40 {
+                                    switching_state += 1;
+                                }
+                                Some(3.0_f32.copysign(switching_start_angle))
+                            } else {
+                                Some(switching_start_angle * 0.2)
                             }
                         },
                         2 => {
-                            if elapsed_seconds >= 0.5 {
-                                self.set_steering_angle(0.0)?;
+                            if self.read_color_sensor()? > 50 { // slowly leaving black line again
+                                right_side_of_line_mode = switching_start_angle.is_sign_positive();
                                 switching_state += 1;
+                                Some(0.0)
+                            } else {
+                                Some(2.0_f32.copysign(switching_start_angle))
                             }
                         },
                         _ => {
-                            self.set_state(LinienfolgerState::Following(target_lane.clone()));
+                            new_state = Some(LinienfolgerState::Following(target_lane.clone()));
+                            None
                         },
+                    };
+                    match steer {
+                        Some(dir) => {
+                            let rotation_deg = self.read_gyro_sensor()?;
+                            let rotation_off = dir - rotation_deg as f32;
+                            println!("Off: {}", rotation_off);
+                            self.set_steering_angle(rotation_off.max(-30.0).min(30.0))?;
+                        },
+                        None => {},
                     }
                 },
             }
+            if let Some(new_state) = new_state { self.set_state(new_state); }
 
             thread::sleep(self.sleep_duration);
         };
@@ -419,6 +463,7 @@ pub enum Task {
     StopNoChange,
     SwitchToLane(Lane),
     GetLane(std::sync::mpsc::Sender<Lane>),
+    GetState(std::sync::mpsc::Sender<LinienfolgerState>),
 }
 
 #[derive(std::fmt::Debug)]
@@ -443,15 +488,7 @@ pub enum Device {
     LargeMotor2,
     MediumMotor,
     ColorSensor,
-} impl Into<super::Device> for &Device {
-    fn into(self) -> super::Device {
-        match self {
-            Device::LargeMotor1 => super::Device::LargeMotor1,
-            Device::LargeMotor2 => super::Device::LargeMotor2,
-            Device::MediumMotor => super::Device::MediumMotor,
-            Device::ColorSensor => super::Device::ColorSensor,
-        }
-    }
+    GyroSensor,
 }
 
 #[derive(std::fmt::Debug)]
@@ -462,7 +499,7 @@ pub enum Lane {
     Right,
 }
 
-#[derive(std::fmt::Debug)]
+#[derive(Clone, std::fmt::Debug)]
 pub enum LinienfolgerState {
     Stopped,
     Following(Lane),

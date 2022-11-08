@@ -69,8 +69,11 @@ impl VirtualRobot {
                         VirtualRequest::SetTurningAngleDeg(ang) => self.robot_turn_speed = ang * std::f32::consts::PI / 180.0,
                         VirtualRequest::SetSpeed(speed) => self.robot_speed = self.virt_info.max_speed * speed as f32 / 100.0,
                         VirtualRequest::VirtGetPos(rp) => {
-                            rp.send((self.robot_pos, self.robot_dir, self.robot_turn_speed)).unwrap();
-                        }
+                            _ = rp.send((self.robot_pos, self.robot_dir, self.robot_turn_speed));
+                        },
+                        VirtualRequest::GetGyroSensorDirection(sender) => {
+                            _ = sender.send((self.robot_dir * 180.0 / std::f32::consts::PI - 90.0).round() as i32);
+                        },
                     }
                 }
                 self.robot_dir += self.robot_turn_speed * 25.0 * self.robot_speed;
@@ -102,6 +105,8 @@ pub enum VirtualRequest {
     ColorSensorBrightness(Sender<i32>),
     /// In cm
     GetDistance(Sender<f32>),
+    /// In degrees
+    GetGyroSensorDirection(Sender<i32>),
     SetTurningAngleDeg(f32),
     SetSpeed(i32),
     /// ((x, y), angle, steering)
