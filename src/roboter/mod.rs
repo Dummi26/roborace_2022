@@ -136,6 +136,9 @@ impl Robot {
                     } else { println!("linienfolger brightness after black line: [50]"); 50 },
                 },
                 erkennung::Config {
+                    distance_obstacle: if let Some(v) = identifier_state.get("erkennung distance obstacle") {
+                        match v.parse() { Ok(v) => v, Err(e) => { println!("erkennung distance obstacle: failed to parse ({e}); [50.0]"); 50.0 } }
+                    } else { println!("erkennung distance obstacle: [50.0]"); 50.0 },
                 },
             )
         };

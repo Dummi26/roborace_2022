@@ -25,6 +25,8 @@ pub struct Thread {
 }
 #[derive(Clone)]
 pub struct Config {
+    /// [50.0] The distance (in cm) where, if we detect an obstacle, we start to switch to another lane
+    pub distance_obstacle: f32,
 }
 
 impl super::ThreadedFeature for Thread {
@@ -102,20 +104,32 @@ impl Thread {
             }
             let dist = self.read_distance_sensor()?;
             // println!("{:.1}cm", dist);
-            if dist < 50.0 {
-                _ = self.send_to_linienfolger.send(LfTask::SwitchToLane(Lane::Left));
+            if dist < self.config.distance_obstacle {
+                _ = self.send_to_linienfolger.send(LfTask::SwitchToLane(match lane {
+                    Lane::Left => Lane::Center,
+                    Lane::Center => Lane::Left,
+                    Lane::Right => {
+                        println!("HOW DID WE END UP ON THE RIGHT LANE????");
+                        Lane::Right
+                    },
+                }));
                 let delay = Duration::from_secs_f32(0.1);
-                loop {
+                let new_lane = loop {
                     thread::sleep(delay);
                     let (s, r) = std::sync::mpsc::channel();
                     _ = self.send_to_linienfolger.send(LfTask::GetState(s));
                     match r.recv().unwrap() {
-                        crate::roboter::linienfolger::LinienfolgerState::Stopped |
-                        crate::roboter::linienfolger::LinienfolgerState::Following(_) => break,
+                        crate::roboter::linienfolger::LinienfolgerState::Stopped => break None,
+                        crate::roboter::linienfolger::LinienfolgerState::Following(lane) => break Some(lane),
                         crate::roboter::linienfolger::LinienfolgerState::Switching(..) => continue,
                     }
+                };
+                if let Some(new_lane) = new_lane {
+                    lane = new_lane;
+                    println!("Passed the obstacle.");
+                } else {
+                    println!("Stopped...? [!!]");
                 }
-                println!("Passed the obstacle.");
             }
             thread::sleep(self.sleep_duration);
         };

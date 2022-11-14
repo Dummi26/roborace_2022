@@ -122,7 +122,7 @@ impl super::ThreadedFeature for Thread {
             sensor_gyro,
             sleep_duration: Duration::from_millis(4), // max: 250Hz
             old_state: None,
-            current_state: LinienfolgerState::Following(Lane::Center),
+            current_state: LinienfolgerState::Following(Lane::Center), // NOTE: Start lane defined here
             target_lane: Lane::Center,
             target_lane_updated: false,
             #[cfg(feature="pc_test")]
@@ -410,10 +410,10 @@ impl Thread {
                             if elapsed >= 1.0 {
                                 self.set_steering_angle(0.0)?;
                                 switching_state += 1;
-                                Some(self.config.angle_lane_change_final)
+                                Some(self.config.angle_lane_change_final.copysign(switching_start_angle))
                             } else {
                                 Some(switching_start_angle * (1.0 - elapsed)
-                                    + elapsed * self.config.angle_lane_change_final)
+                                    + elapsed * self.config.angle_lane_change_final.copysign(switching_start_angle))
                             }
                         },
                         1 => {
@@ -424,7 +424,7 @@ impl Thread {
                                 }
                                 Some(self.config.angle_lane_change_encounter.copysign(switching_start_angle))
                             } else {
-                                Some(self.config.angle_lane_change_final)
+                                Some(self.config.angle_lane_change_final.copysign(switching_start_angle))
                             }
                         },
                         2 => {

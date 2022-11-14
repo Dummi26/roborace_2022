@@ -35,7 +35,7 @@ fn main() {
                 color_sensor_radius: 2, // pixels
                 max_speed: 0.001,
             };
-            robot = Some(roboter::Robot::new(String::from("testing id: state\n   \n\n    testing two:\n   \n     something else\n"), info.clone()));
+            robot = Some(roboter::Robot::new(String::from("erkennung distance obstacle: 150.0"), info.clone()));
         }
         #[cfg(not(feature="pc_test"))] {
             robot = Some(roboter::Robot::new(
