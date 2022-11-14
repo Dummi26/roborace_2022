@@ -19,10 +19,12 @@ pub struct Robot {
     pub motor_l1: Option<LargeMotor>,
     pub motor_l2: Option<LargeMotor>,
     pub motor_med: Option<MediumMotor>,
-    pub sensor_gyro: Option<GyroSensor>,
     pub sensor_color: Option<ColorSensor>,
     pub sensor_ultraschall: Option<UltrasonicSensor>,
     pub sensor_touch: Option<TouchSensor>,
+    pub sensor_gyro: Option<GyroSensor>,
+
+    pub config: (linienfolger::Config, erkennung::Config),
 
     // PC test mode
     #[cfg(feature="pc_test")]
@@ -58,7 +60,85 @@ pub enum Thread<T, S, R> {
 }
 
 impl Robot {
-    pub fn new(#[cfg(feature="pc_test")] pc_test_robot: crate::test::virt_info::VirtInfo) -> Self {
+    pub fn new(config: String, #[cfg(feature="pc_test")] pc_test_robot: crate::test::virt_info::VirtInfo) -> Self {
+        let config = { // Parse config file
+            let chars = config.chars().into_iter();
+            let mut identifier = String::new();
+            let mut value = String::new();
+            let mut state = State::SkipSpacesThenReadIdentifier;
+            let mut identifier_state = std::collections::HashMap::<String, String>::new();
+            enum State {
+                SkipSpacesThenReadIdentifier,
+                ReadingIdentifier,
+                SkipSpacesThenReadValue,
+                ReadingValue,
+            }
+            for ch in chars {
+                match state {
+                    State::SkipSpacesThenReadIdentifier => match ch {
+                        ' ' | '\t' | '\n' => (), _ => { identifier.push(ch); state = State::ReadingIdentifier; },
+                    },
+                    State::ReadingIdentifier => match ch {
+                        ':' => state = State::SkipSpacesThenReadValue,
+                        _ => identifier.push(ch),
+                    },
+                    State::SkipSpacesThenReadValue => match ch {
+                        ' ' | '\t' | '\n' => (), _ => { value.push(ch); state = State::ReadingValue; },
+                    },
+                    State::ReadingValue => match ch {
+                        '\n' => {
+                            // println!("'{}' = '{}'", identifier, value);
+                            identifier_state.insert(identifier, value);
+                            (identifier, value) = (String::new(), String::new());
+                            state = State::SkipSpacesThenReadIdentifier;
+                        },
+                        _ => value.push(ch),
+                    },
+                }
+            }
+            match state {
+                State::SkipSpacesThenReadIdentifier => (),
+                State::ReadingIdentifier => println!("Unexpected end of robot config: EOF found after identifier '{}'!", identifier),
+                State::SkipSpacesThenReadValue | State::ReadingValue => {
+                    // println!("\"{}\" = \"{}\"", identifier, value);
+                    identifier_state.insert(identifier, value);
+                },
+            }
+            // Set configs
+            (
+                linienfolger::Config {
+                    default_speed_in_percent: if let Some(v) = identifier_state.get("linienfolger default speed") {
+                        match v.parse() { Ok(v) => v, Err(e) => { println!("linienfolger default speed: failed to parse ({e}); [60]"); 60 } }
+                    } else { println!("linienfolger default speed: [60]"); 60 },
+                    importance_of_brightness_change: if let Some(v) = identifier_state.get("linienfolger importance of brightness change") {
+                        match v.parse() { Ok(v) => v, Err(e) => { println!("linienfolger importance of brightness change: failed to parse ({e}); [2.5]"); 2.5 } }
+                    } else { println!("linienfolger importance of brightness change: [2.5]"); 2.5 },
+                    angle_lane_change_start: if let Some(v) = identifier_state.get("linienfolger angle lange change start") {
+                        match v.parse() { Ok(v) => v, Err(e) => { println!("linienfolger angle lange change start: failed to parse ({e}); [30.0]"); 30.0 } }
+                    } else { println!("linienfolger angle lange change start: [30.0]"); 30.0 },
+                    seconds_to_straighten_out: if let Some(v) = identifier_state.get("linienfolger seconds to straighten out") {
+                        match v.parse() { Ok(v) => v, Err(e) => { println!("linienfolger seconds to straighten out: failed to parse ({e}); [0.7]"); 0.7 } }
+                    } else { println!("linienfolger seconds to straighten out: [0.7]"); 0.7 },
+                    angle_lane_change_final: if let Some(v) = identifier_state.get("linienfolger angle lange change final") {
+                        match v.parse() { Ok(v) => v, Err(e) => { println!("linienfolger angle lange change final: failed to parse ({e}); [30.0]"); 6.0 } }
+                    } else { println!("linienfolger angle lange change final: [30.0]"); 6.0 },
+                    brightness_entering_black_line: if let Some(v) = identifier_state.get("linienfolger brightness entering black line") {
+                        match v.parse() { Ok(v) => v, Err(e) => { println!("linienfolger brightness entering black line: failed to parse ({e}); [60]"); 60 } }
+                    } else { println!("linienfolger brightness entering black line: [60]"); 60 },
+                    angle_lane_change_encounter: if let Some(v) = identifier_state.get("linienfolger angle lange change encounter") {
+                        match v.parse() { Ok(v) => v, Err(e) => { println!("linienfolger angle lange change encounter: failed to parse ({e}); [2.0]"); 2.0 } }
+                    } else { println!("linienfolger angle lange change encounter: [2.0]"); 2.0 },
+                    brightness_on_black_line: if let Some(v) = identifier_state.get("linienfolger brightness on black line") {
+                        match v.parse() { Ok(v) => v, Err(e) => { println!("linienfolger brightness on black line: failed to parse ({e}); [40]"); 40 } }
+                    } else { println!("linienfolger brightness on black line: [40]"); 40 },
+                    brightness_after_black_line: if let Some(v) = identifier_state.get("linienfolger brightness after black line") {
+                        match v.parse() { Ok(v) => v, Err(e) => { println!("linienfolger brightness after black line: failed to parse ({e}); [50]"); 50 } }
+                    } else { println!("linienfolger brightness after black line: [50]"); 50 },
+                },
+                erkennung::Config {
+                },
+            )
+        };
         let mut large_motors = match LargeMotor::list() { Ok(v) => v.into_iter(), Err(_) => vec![].into_iter() };
         Self {
             max_number_of_retries_on_communication_failure: (0, Duration::ZERO),
@@ -71,6 +151,7 @@ impl Robot {
             sensor_ultraschall: UltrasonicSensor::find().ok(),
             sensor_touch: TouchSensor::find().ok(),
             sensor_gyro: GyroSensor::find().ok(),
+            config,
             #[cfg(feature="pc_test")]
             pc_test_thread: crate::test::virtual_robot::VirtualRobot::new(pc_test_robot.clone()),
             #[cfg(feature="pc_test")]

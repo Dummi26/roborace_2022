@@ -1,5 +1,7 @@
 use image::{DynamicImage, io::Reader as ImageReader};
 
+// Screen: 178 x 128
+
 pub struct ImageKeeper {
     pub image_err_missing_ultraschallsensor: PotImage,
 }
@@ -55,7 +57,7 @@ impl PotImage {
     }
 
     pub fn get(&mut self) -> Option<&mut DynamicImage> {
-        self.load();
+        _ = self.load();
         if let Self::Img(img) = self {
             Some(img)
         } else {

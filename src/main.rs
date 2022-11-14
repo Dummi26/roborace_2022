@@ -35,10 +35,15 @@ fn main() {
                 color_sensor_radius: 2, // pixels
                 max_speed: 0.001,
             };
-            robot = Some(roboter::Robot::new(info.clone()));
+            robot = Some(roboter::Robot::new(String::from("testing id: state\n   \n\n    testing two:\n   \n     something else\n"), info.clone()));
         }
         #[cfg(not(feature="pc_test"))] {
-            robot = Some(roboter::Robot::new());
+            robot = Some(roboter::Robot::new(
+                match std::fs::read_to_string("/home/robot/school/assets/robot.conf") {
+                    Ok(v) => v,
+                    Err(e) => String::new(),
+                }
+            ));
         }
         let mut robot = robot.unwrap();
         #[cfg(feature="pc_test")] {

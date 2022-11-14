@@ -97,7 +97,7 @@ impl WindowHandler for EditorWindowHandler {
         // DRAW VEHICLE POSITION AND ROTATION
         let (pos, rot, steering) = {
             let ch = std::sync::mpsc::channel();
-            self.virtual_robot_sender.send(VirtualRequest::VirtGetPos(ch.0));
+            _ = self.virtual_robot_sender.send(VirtualRequest::VirtGetPos(ch.0));
             ch.1.recv().unwrap()
         };
         let color_sensor_offset = super::virtual_robot::VirtualRobot::general_robot_pos_color_sensor(rot, steering, &self.virt_info);

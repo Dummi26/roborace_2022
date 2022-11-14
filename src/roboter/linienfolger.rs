@@ -10,6 +10,7 @@ use crate::test::virtual_robot::VirtualRequest;
 pub struct Thread {
     pub sender: mpsc::Sender<Task>,
     pub receiver: mpsc::Receiver<Task>,
+    pub config: Config,
     pub max_number_of_retries_on_communication_failure: (u32, Duration),
     #[cfg(not(feature="pc_test"))]
     pub motor_l1: LargeMotor,
@@ -28,6 +29,27 @@ pub struct Thread {
     target_lane_updated: bool,
     #[cfg(feature="pc_test")]
     pub virtual_robot: std::sync::mpsc::Sender<crate::test::virtual_robot::VirtualRequest>,
+}
+#[derive(Clone, )]
+pub struct Config {
+    /// [60] The speed at which the robot moves forward.
+    pub default_speed_in_percent: i32,
+    /// [2.5] If 0, steering is proportional to brightness
+    pub importance_of_brightness_change: f32,
+    /// [30.0] Steering angle when changing from one lane to another, in degrees - Should not exceed 30.0
+    pub angle_lane_change_start: f32,
+    /// [0.7] The steering angle will be changed from the start angle to a lesser angle during this time. If this is too high, the robot will probably overshoot the line. It is more acceptable to set this to a value that is a little bit lower than the optimal one, just to be safe. This should probably be dependant on the robot's speed in the future! [TODO]
+    pub seconds_to_straighten_out: f32,
+    /// [6.0] After enough time has elapsed, the angle between movement direction and line will be this. Set this too high and we might miss the line, set it too low and lane changes take longer.
+    pub angle_lane_change_final: f32,
+    /// [60] This brightness will trigger the switch from angle_lane_change_final to angle_lane_change_encounter.
+    pub brightness_entering_black_line: i32,
+    /// [2.0] After detecting the black line, this is the new target angle
+    pub angle_lane_change_encounter: f32,
+    /// [40] Read brightness_after_black_line!
+    pub brightness_on_black_line: i32,
+    /// [50] If brightness was <= brightness_on_black_line and later >= this, assume we are on the outer side of the line (we have moved past the line's center) and switch back to Line-Following mode.
+    pub brightness_after_black_line: i32,
 }
 
 impl super::ThreadedFeature for Thread {
@@ -86,6 +108,7 @@ impl super::ThreadedFeature for Thread {
         Ok(Self {
             sender,
             receiver,
+            config: robot.config.0.clone(),
             max_number_of_retries_on_communication_failure: robot.max_number_of_retries_on_communication_failure.clone(),
             #[cfg(not(feature="pc_test"))]
             motor_l1,
@@ -206,7 +229,7 @@ impl Thread {
     }
     #[cfg(feature="pc_test")]
     fn set_speed(&self, speed: i32) -> Result<(), StopReason> {
-        self.virtual_robot.send(crate::test::virtual_robot::VirtualRequest::SetSpeed(speed));
+        _ = self.virtual_robot.send(crate::test::virtual_robot::VirtualRequest::SetSpeed(speed));
         Ok(())
     }
 
@@ -283,11 +306,11 @@ impl Thread {
         // Switching
         let mut switching_start_time = std::time::Instant::now();
         let mut switching_start_angle = 0.0;
-        let mut switching_state = 0; // TODO: Enum!
+        let mut switching_state = 0; // TODO?: Enum
 
         // START
 
-        self.set_speed(30)?;
+        self.set_speed(self.config.default_speed_in_percent)?;
 
         loop {
             while let Ok(recv) = self.receiver.try_recv() {
@@ -312,62 +335,63 @@ impl Thread {
             let mut new_state = None;
             match &self.current_state {
                 LinienfolgerState::Stopped => return Err(StopReason::GracefullyStoppedForInternalReasons()),
-                LinienfolgerState::Following(lane) => {
+                LinienfolgerState::Following(_lane) => {
                     // Linienverfolgung
-                    if true {
-                        let detected_color = self.read_color_sensor()?;
-                        avg_change = avg_change * 0.7 + 0.3 * ((detected_color - previous_brightness) as f32);
-                        let expected_brightness_in_25ms = (detected_color + previous_brightness) as f32 / 2.0 + (2.5 /* = 25ms */ + 0.5 /* because we average with previous_brightness */) * avg_change;
-                        let brightness_diff = expected_brightness_in_25ms - 50.0;
+                    {
+                        let detected_brightness = self.read_color_sensor()?;
+                        avg_change = avg_change * 0.7 + 0.3 * ((detected_brightness - previous_brightness) as f32);
+                        let expected_brightness_soon = (detected_brightness + previous_brightness) as f32 / 2.0 + (self.config.importance_of_brightness_change + 0.5 /* because we average with previous_brightness */) * avg_change;
+                        let brightness_diff = expected_brightness_soon - 50.0;
                         self.set_steering_angle(brightness_diff.min(30.0).max(-30.0) as f32)?;
-                        previous_brightness = detected_color;
-                    } else {
-                        let detected_color = self.read_color_sensor()?;
-                        // println!("[Color Sensor] read {}.", detected_color);
-                        // println!("Change: {}", avg_change);
-
-                        // Bright -> Away
-                        // Dark -> Line
-                        avg_change = avg_change * 0.8 + 0.2 * ((detected_color - previous_brightness) as f32 / 10.0).max(-1.0).min(1.0);
-                        let brightness_diff = detected_color - 50;
-                        let turn_factor = (brightness_diff as f32 / 40.0).max(-1.0).min(1.0);
-                        // POSITIVE -> Steer normal, NEGATIVE -> Steer away from line
-                        let change_factor = if avg_change >= 0.0 && turn_factor >= 0.0 {
-                            if avg_change > 0.4 {
-                                println!("going the wrong way... (line :: {:.2})", avg_change);
-                            }
-                            1.0 + 12.0 * avg_change * avg_change
-                        } else if avg_change >= 0.0 {
-                            0.5 - 1.5 * avg_change.abs()
-                        } else if turn_factor >= 0.0 {
-                            0.5 - 1.5 * avg_change.abs()
-                        } else {
-                            if -avg_change > 0.4 {
-                                println!("going the wrong way... (line :: {:.2})", -avg_change);
-                            }
-                            1.0 + 12.0 * avg_change * avg_change
-                        };
-                        // println!("Factor: {:.2} | Turn: {:.2}", change_factor, turn_factor);
-                        let angle = (change_factor * turn_factor * 20.0).max(-40.0).min(40.0);
-                        self.set_steering_angle(if right_side_of_line_mode { -angle } else { angle })?;
-                        previous_brightness = detected_color;
+                        previous_brightness = detected_brightness;
                     }
+                    // {
+                    //     let detected_color = self.read_color_sensor()?;
+                    //     // println!("[Color Sensor] read {}.", detected_color);
+                    //     // println!("Change: {}", avg_change);
+                    // 
+                    //     // Bright -> Away
+                    //     // Dark -> Line
+                    //     avg_change = avg_change * 0.8 + 0.2 * ((detected_color - previous_brightness) as f32 / 10.0).max(-1.0).min(1.0);
+                    //     let brightness_diff = detected_color - 50;
+                    //     let turn_factor = (brightness_diff as f32 / 40.0).max(-1.0).min(1.0);
+                    //     // POSITIVE -> Steer normal, NEGATIVE -> Steer away from line
+                    //     let change_factor = if avg_change >= 0.0 && turn_factor >= 0.0 {
+                    //         if avg_change > 0.4 {
+                    //             println!("going the wrong way... (line :: {:.2})", avg_change);
+                    //         }
+                    //         1.0 + 12.0 * avg_change * avg_change
+                    //     } else if avg_change >= 0.0 {
+                    //         0.5 - 1.5 * avg_change.abs()
+                    //     } else if turn_factor >= 0.0 {
+                    //         0.5 - 1.5 * avg_change.abs()
+                    //     } else {
+                    //         if -avg_change > 0.4 {
+                    //             println!("going the wrong way... (line :: {:.2})", -avg_change);
+                    //         }
+                    //         1.0 + 12.0 * avg_change * avg_change
+                    //     };
+                    //     // println!("Factor: {:.2} | Turn: {:.2}", change_factor, turn_factor);
+                    //     let angle = (change_factor * turn_factor * 20.0).max(-40.0).min(40.0);
+                    //     self.set_steering_angle(if right_side_of_line_mode { -angle } else { angle })?;
+                    //     previous_brightness = detected_color;
+                    // }
                 },
-                LinienfolgerState::Switching(prev_lane, target_lane, max_distance) => {
+                LinienfolgerState::Switching(prev_lane, target_lane, _max_distance) => {
                     if let Some(_old_state) = self.old_state.take() {
                         switching_start_time = std::time::Instant::now();
                         switching_state = 0;
                         // begin
-                        switching_start_angle =
+                        switching_start_angle = self.config.angle_lane_change_start *
                             match (prev_lane, target_lane) {
                                 (Lane::Left, Lane::Left) => 0.0,
-                                (Lane::Left, Lane::Center) => 10.0,
-                                (Lane::Left, Lane::Right) => 10.0,
-                                (Lane::Center, Lane::Left) => -10.0,
+                                (Lane::Left, Lane::Center) => 1.0,
+                                (Lane::Left, Lane::Right) => 1.0,
+                                (Lane::Center, Lane::Left) => -1.0,
                                 (Lane::Center, Lane::Center) => 0.0,
-                                (Lane::Center, Lane::Right) => 10.0,
-                                (Lane::Right, Lane::Left) => -10.0,
-                                (Lane::Right, Lane::Center) => -10.0,
+                                (Lane::Center, Lane::Right) => 1.0,
+                                (Lane::Right, Lane::Left) => -1.0,
+                                (Lane::Right, Lane::Center) => -1.0,
                                 (Lane::Right, Lane::Right) => 0.0,
                             }
                         ;
@@ -382,33 +406,34 @@ impl Thread {
                     let steer = match &switching_state {
                         0 => {
                             //                    TODO/NOTE: This value depends on the robot's speed!
-                            let elapsed = (elapsed_seconds / 0.75).min(1.0);
+                            let elapsed = (elapsed_seconds / self.config.seconds_to_straighten_out).min(1.0);
                             if elapsed >= 1.0 {
                                 self.set_steering_angle(0.0)?;
                                 switching_state += 1;
-                                Some(switching_start_angle * 0.2)
+                                Some(self.config.angle_lane_change_final)
                             } else {
-                                Some(switching_start_angle * (1.0 - 0.8 * elapsed))
+                                Some(switching_start_angle * (1.0 - elapsed)
+                                    + elapsed * self.config.angle_lane_change_final)
                             }
                         },
                         1 => {
                             let brightness = self.read_color_sensor()?;
-                            if brightness < 60 { // encountered a black line
-                                if brightness < 40 {
+                            if brightness <= self.config.brightness_entering_black_line { // encountered a black line
+                                if brightness <= self.config.brightness_on_black_line {
                                     switching_state += 1;
                                 }
-                                Some(3.0_f32.copysign(switching_start_angle))
+                                Some(self.config.angle_lane_change_encounter.copysign(switching_start_angle))
                             } else {
-                                Some(switching_start_angle * 0.2)
+                                Some(self.config.angle_lane_change_final)
                             }
                         },
                         2 => {
-                            if self.read_color_sensor()? > 50 { // slowly leaving black line again
+                            if self.read_color_sensor()? >= self.config.brightness_after_black_line { // slowly leaving black line again
                                 right_side_of_line_mode = switching_start_angle.is_sign_positive();
                                 switching_state += 1;
                                 Some(0.0)
                             } else {
-                                Some(2.0_f32.copysign(switching_start_angle))
+                                Some(self.config.angle_lane_change_encounter.copysign(switching_start_angle))
                             }
                         },
                         _ => {
@@ -420,7 +445,6 @@ impl Thread {
                         Some(dir) => {
                             let rotation_deg = self.read_gyro_sensor()?;
                             let rotation_off = dir - rotation_deg as f32;
-                            println!("Off: {}", rotation_off);
                             self.set_steering_angle(rotation_off.max(-30.0).min(30.0))?;
                         },
                         None => {},

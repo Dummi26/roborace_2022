@@ -12,15 +12,19 @@ use crate::test::virtual_robot::VirtualRequest;
 pub struct Thread {
     pub sender: mpsc::Sender<Task>,
     pub receiver: mpsc::Receiver<Task>,
+    pub config: Config,
     pub send_to_linienfolger: mpsc::Sender<super::linienfolger::Task>,
     pub max_number_of_retries_on_communication_failure: (u32, Duration),
     #[cfg(not(feature="pc_test"))]
     pub sensor_distance: UltrasonicSensor,
-    #[cfg(not(feature="pc_test"))]
-    pub sensor_touch: TouchSensor,
+    // #[cfg(not(feature="pc_test"))]
+    // pub sensor_touch: TouchSensor,
     sleep_duration: Duration,
     #[cfg(feature="pc_test")]
     pub virtual_robot: std::sync::mpsc::Sender<crate::test::virtual_robot::VirtualRequest>,
+}
+#[derive(Clone)]
+pub struct Config {
 }
 
 impl super::ThreadedFeature for Thread {
@@ -32,13 +36,13 @@ impl super::ThreadedFeature for Thread {
         let sensor_distance = match robot.sensor_ultraschall.take() { Some(v) => v, None => {
             return Err(InitError::MissingDevice(Device::UltrasonicSensor)); } };
         #[cfg(not(feature="pc_test"))]
-        let sensor_touch = match robot.sensor_touch.take() { Some(v) => v, None => {
-            robot.sensor_ultraschall = Some(sensor_distance);
-            return Err(InitError::MissingDevice(Device::TouchSensor)); } };
+        // let sensor_touch = match robot.sensor_touch.take() { Some(v) => v, None => {
+        //     robot.sensor_ultraschall = Some(sensor_distance);
+        //     return Err(InitError::MissingDevice(Device::TouchSensor)); } };
         #[cfg(not(feature="pc_test"))] {
-            match sensor_distance.set_mode_us_si_cm() { Ok(()) => {}, Err(_e) => {
+            match sensor_distance.set_mode_us_dist_cm() { Ok(()) => {}, Err(_e) => {
                 robot.sensor_ultraschall = Some(sensor_distance);
-                robot.sensor_touch = Some(sensor_touch);
+                // robot.sensor_touch = Some(sensor_touch);
                 return Err(InitError::MissingDevice(Device::UltrasonicSensor)); } };
         }
 
@@ -47,12 +51,13 @@ impl super::ThreadedFeature for Thread {
         Ok(Self {
             sender,
             receiver,
+            config: robot.config.1.clone(),
             send_to_linienfolger,
             max_number_of_retries_on_communication_failure: robot.max_number_of_retries_on_communication_failure.clone(),
             #[cfg(not(feature="pc_test"))]
             sensor_distance,
-            #[cfg(not(feature="pc_test"))]
-            sensor_touch,
+            // #[cfg(not(feature="pc_test"))]
+            // sensor_touch,
             sleep_duration: Duration::from_millis(20), // max: 50Hz
             #[cfg(feature="pc_test")]
             virtual_robot: robot.pc_test_thread.1.clone(),
@@ -99,7 +104,7 @@ impl Thread {
             // println!("{:.1}cm", dist);
             if dist < 50.0 {
                 _ = self.send_to_linienfolger.send(LfTask::SwitchToLane(Lane::Left));
-                let delay = Duration::from_secs_f32(0.25);
+                let delay = Duration::from_secs_f32(0.1);
                 loop {
                     thread::sleep(delay);
                     let (s, r) = std::sync::mpsc::channel();
