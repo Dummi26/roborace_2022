@@ -70,9 +70,10 @@ fn main() {
                                 screen.image.put_pixel(x, y, *px);
                             }
                             screen.update();
+                        } else {
+                            println!("Error initializing the program:\n - - - - -\n{:?}\n - - - - -\nExiting in 5 seconds.", e);
                         }
                     }
-                    println!("Error initializing the program:\n - - - - -\n{:?}\n - - - - -\nExiting in 5 seconds.", e);
                     std::thread::sleep(std::time::Duration::from_secs(5));
                     return;
                 },

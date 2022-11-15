@@ -125,8 +125,8 @@ impl Thread {
                     }
                 };
                 if let Some(new_lane) = new_lane {
+                    println!("Passed the obstacle. New lane: {:?}", new_lane);
                     lane = new_lane;
-                    println!("Passed the obstacle.");
                 } else {
                     println!("Stopped...? [!!]");
                 }

@@ -250,6 +250,9 @@ impl Thread {
     }
 
     fn run_sync(&mut self) -> Result<(), StopReason> {
+        // loop { thread::sleep(Duration::from_secs_f64(0.1)); println!("Angle: {}", self.read_gyro_sensor()?); }
+        #[cfg(not(feature="pc_test"))]
+        match self.sensor_gyro.set_mode_gyro_cal() { Ok(_) => (), Err(_) => return Err(StopReason::DeviceFailedToRespond(Device::GyroSensor)), };
         let mut right_side_of_line_mode = match {
             self.stop_motors();
             let max_angle_deg = 42.5;
@@ -296,6 +299,8 @@ impl Thread {
                 [Some(false), Some(false)] => None,
             }
         } { None => { println!("Couldn't determine which side of the line I am on, using default value."); false }, Some(v) => {println!("It seems I am on the {} side of the line.", if v { "right" } else { "left" }); v } };
+        #[cfg(not(feature="pc_test"))]
+        match self.sensor_gyro.set_mode_gyro_ang() { Ok(_) => (), Err(_) => return Err(StopReason::DeviceFailedToRespond(Device::GyroSensor)), };
 
         // VARS
 
@@ -333,7 +338,7 @@ impl Thread {
                 }
             }
             let mut new_state = None;
-            match &self.current_state {
+            match &self.current_state { // ~NOTE~ This is where stuff happens ~NOTE~
                 LinienfolgerState::Stopped => return Err(StopReason::GracefullyStoppedForInternalReasons()),
                 LinienfolgerState::Following(_lane) => {
                     // Linienverfolgung
@@ -342,7 +347,8 @@ impl Thread {
                         avg_change = avg_change * 0.7 + 0.3 * ((detected_brightness - previous_brightness) as f32);
                         let expected_brightness_soon = (detected_brightness + previous_brightness) as f32 / 2.0 + (self.config.importance_of_brightness_change + 0.5 /* because we average with previous_brightness */) * avg_change;
                         let brightness_diff = expected_brightness_soon - 50.0;
-                        self.set_steering_angle(brightness_diff.min(30.0).max(-30.0) as f32)?;
+                        let steer = brightness_diff.min(30.0).max(-30.0) as f32;
+                        self.set_steering_angle(if right_side_of_line_mode { -steer } else { steer })?;
                         previous_brightness = detected_brightness;
                     }
                     // {
@@ -398,7 +404,7 @@ impl Thread {
                         if switching_start_angle == 0.0 {
                             new_state = Some(LinienfolgerState::Following(target_lane.clone()));
                         } else {
-                            self.set_steering_angle(switching_start_angle)?;
+                            self.set_steering_angle(switching_start_angle.min(30.0).max(-30.0))?;
                         }
                     }
                     let elapsed_seconds = switching_start_time.elapsed().as_secs_f32();
@@ -412,8 +418,12 @@ impl Thread {
                                 switching_state += 1;
                                 Some(self.config.angle_lane_change_final.copysign(switching_start_angle))
                             } else {
-                                Some(switching_start_angle * (1.0 - elapsed)
+                                Some(
+                                    (switching_start_angle * (1.0 - elapsed)
                                     + elapsed * self.config.angle_lane_change_final.copysign(switching_start_angle))
+                                    // .min(30.0).max(-30.0) /* since this isn't directly influencing the steering angle, we don't necessarily need this (although it might be useful) */
+                                    // NOTE: I REMOVED THIS WITHOUT TESTING
+                                )
                             }
                         },
                         1 => {

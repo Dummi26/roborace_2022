@@ -4,19 +4,31 @@ use image::{DynamicImage, io::Reader as ImageReader};
 
 pub struct ImageKeeper {
     pub image_err_missing_ultraschallsensor: PotImage,
+    pub image_err_missing_farbsensor: PotImage,
+    pub image_err_missing_gyrosensor: PotImage,
+    pub image_err_missing_motor_gros: PotImage,
+    pub image_err_missing_motor_klein: PotImage,
 }
 impl ImageKeeper {
     pub fn new() -> Self { Self {
         image_err_missing_ultraschallsensor:
             PotImage::new("/home/robot/school/assets/ultraschallsensor_missing.png"),
+        image_err_missing_farbsensor:
+            PotImage::new("/home/robot/school/assets/farbsensor_missing.png"),
+        image_err_missing_gyrosensor:
+            PotImage::new("/home/robot/school/assets/gyrosensor_missing.png"),
+        image_err_missing_motor_gros:
+            PotImage::new("/home/robot/school/assets/motor_gros_missing.png"),
+        image_err_missing_motor_klein:
+            PotImage::new("/home/robot/school/assets/motor_klein_missing.png"),
     } }
     pub fn get_err_missing_dev(&mut self, dev: &crate::roboter::Device) -> Option<&mut DynamicImage> {
         match dev {
-            crate::roboter::Device::LargeMotor1 => self.image_err_missing_ultraschallsensor.get(),
-            crate::roboter::Device::LargeMotor2 => self.image_err_missing_ultraschallsensor.get(),
-            crate::roboter::Device::MediumMotor => self.image_err_missing_ultraschallsensor.get(),
-            crate::roboter::Device::ColorSensor => self.image_err_missing_ultraschallsensor.get(),
-            crate::roboter::Device::GyroSensor => self.image_err_missing_ultraschallsensor.get(),
+            crate::roboter::Device::LargeMotor1 => self.image_err_missing_motor_gros.get(),
+            crate::roboter::Device::LargeMotor2 => self.image_err_missing_motor_gros.get(),
+            crate::roboter::Device::MediumMotor => self.image_err_missing_motor_klein.get(),
+            crate::roboter::Device::ColorSensor => self.image_err_missing_farbsensor.get(),
+            crate::roboter::Device::GyroSensor => self.image_err_missing_gyrosensor.get(),
             crate::roboter::Device::TouchSensor => self.image_err_missing_ultraschallsensor.get(),
             crate::roboter::Device::UltrasonicSensor => self.image_err_missing_ultraschallsensor.get(),
         }
