@@ -10,6 +10,7 @@ use crate::test::virtual_robot::VirtualRequest;
 pub struct Thread {
     pub sender: mpsc::Sender<Task>,
     pub receiver: mpsc::Receiver<Task>,
+    pub erkennung_sender: Option<mpsc::Sender<super::erkennung::Task>>,
     pub config: Config,
     pub max_number_of_retries_on_communication_failure: (u32, Duration),
     #[cfg(not(feature="pc_test"))]
@@ -36,8 +37,10 @@ pub struct Config {
     pub default_speed_in_percent: i32,
     /// [2.5] If 0, steering is proportional to brightness
     pub importance_of_brightness_change: f32,
-    /// [30.0] Steering angle when changing from one lane to another, in degrees - Should not exceed 30.0
+    /// [30.0] Steering angle when changing from one lane to another, in degrees
     pub angle_lane_change_start: f32,
+    /// [3.0] Like seconds_to_straighten_out, but this is preferred.
+    pub rotations_to_straighten_out: f32,
     /// [0.7] The steering angle will be changed from the start angle to a lesser angle during this time. If this is too high, the robot will probably overshoot the line. It is more acceptable to set this to a value that is a little bit lower than the optimal one, just to be safe. This should probably be dependant on the robot's speed in the future! [TODO]
     pub seconds_to_straighten_out: f32,
     /// [6.0] After enough time has elapsed, the angle between movement direction and line will be this. Set this too high and we might miss the line, set it too low and lane changes take longer.
@@ -108,6 +111,7 @@ impl super::ThreadedFeature for Thread {
         Ok(Self {
             sender,
             receiver,
+            erkennung_sender: None,
             config: robot.config.0.clone(),
             max_number_of_retries_on_communication_failure: robot.max_number_of_retries_on_communication_failure.clone(),
             #[cfg(not(feature="pc_test"))]
@@ -251,10 +255,16 @@ impl Thread {
 
     fn run_sync(&mut self) -> Result<(), StopReason> {
         // loop { thread::sleep(Duration::from_secs_f64(0.1)); println!("Angle: {}", self.read_gyro_sensor()?); }
+        self.stop_motors();
+        std::thread::sleep(Duration::from_secs_f64(0.5));
         #[cfg(not(feature="pc_test"))]
         match self.sensor_gyro.set_mode_gyro_cal() { Ok(_) => (), Err(_) => return Err(StopReason::DeviceFailedToRespond(Device::GyroSensor)), };
+        #[cfg(not(feature="pc_test"))]
+        std::thread::sleep(Duration::from_secs_f64(2.5));
+        #[cfg(not(feature="pc_test"))]
+        match self.sensor_gyro.set_mode_gyro_ang() { Ok(_) => (), Err(_) => return Err(StopReason::DeviceFailedToRespond(Device::GyroSensor)), };
+        std::thread::sleep(Duration::from_secs_f64(0.25));
         let mut right_side_of_line_mode = match {
-            self.stop_motors();
             let max_angle_deg = 42.5;
             thread::sleep(Duration::from_secs_f64(0.3));
             self.set_steering_angle(-max_angle_deg)?;
@@ -298,9 +308,7 @@ impl Thread {
                 [Some(true), Some(true)] => None,
                 [Some(false), Some(false)] => None,
             }
-        } { None => { println!("Couldn't determine which side of the line I am on, using default value."); false }, Some(v) => {println!("It seems I am on the {} side of the line.", if v { "right" } else { "left" }); v } };
-        #[cfg(not(feature="pc_test"))]
-        match self.sensor_gyro.set_mode_gyro_ang() { Ok(_) => (), Err(_) => return Err(StopReason::DeviceFailedToRespond(Device::GyroSensor)), };
+        } { None => { println!("Couldn't determine which side of the line I am on, using default value."); true }, Some(v) => {println!("It seems I am on the {} side of the line.", if v { "right" } else { "left" }); v } };
 
         // VARS
 
@@ -309,7 +317,9 @@ impl Thread {
         let mut avg_change = 0.0;
 
         // Switching
-        let mut switching_start_time = std::time::Instant::now();
+        let mut switching_start_time: Option<std::time::Instant> = None;
+        // If this is true, switching_start_time (or motor rotations) will be used by the line follower to limit how far the steering will go.
+        let mut limit_angle = false;
         let mut switching_start_angle = 0.0;
         let mut switching_state = 0; // TODO?: Enum
 
@@ -335,6 +345,7 @@ impl Thread {
                     },
                     Task::GetLane(sender) => _ = sender.send(self.target_lane.clone()),
                     Task::GetState(sender) => _ = sender.send(self.current_state.clone()),
+                    Task::SetErkennungSender(s) => self.erkennung_sender = s,
                 }
             }
             let mut new_state = None;
@@ -347,7 +358,23 @@ impl Thread {
                         avg_change = avg_change * 0.7 + 0.3 * ((detected_brightness - previous_brightness) as f32);
                         let expected_brightness_soon = (detected_brightness + previous_brightness) as f32 / 2.0 + (self.config.importance_of_brightness_change + 0.5 /* because we average with previous_brightness */) * avg_change;
                         let brightness_diff = expected_brightness_soon - 50.0;
-                        let steer = brightness_diff.min(30.0).max(-30.0) as f32;
+                        let max_angle = if limit_angle {
+                            if let Some(time) = switching_start_time {
+                                let el = time.elapsed().as_secs_f32();
+                                if el > 0.5 { limit_angle = false; println!("[following] angle limit removed - time"); }
+                                10.0
+                            } else {
+                                // TODO!
+                                if self.motor_l1.get_position().unwrap() as f32 / self.motor_l1.get_count_per_rot().unwrap() as f32 > 0.8 {
+                                    limit_angle = false;
+                                    println!("[following] angle limit removed - motor rotations");
+                                }
+                                10.0
+                            }
+                        } else {
+                            30.0
+                        };
+                        let steer = brightness_diff.min(max_angle).max(-max_angle) as f32;
                         self.set_steering_angle(if right_side_of_line_mode { -steer } else { steer })?;
                         previous_brightness = detected_brightness;
                     }
@@ -385,7 +412,11 @@ impl Thread {
                 },
                 LinienfolgerState::Switching(prev_lane, target_lane, _max_distance) => {
                     if let Some(_old_state) = self.old_state.take() {
-                        switching_start_time = std::time::Instant::now();
+                        if let Ok(_) = self.motor_l1.set_position(0) {
+                            switching_start_time = None;
+                        } else {
+                            switching_start_time = Some(std::time::Instant::now());
+                        }
                         switching_state = 0;
                         // begin
                         switching_start_angle = self.config.angle_lane_change_start *
@@ -407,14 +438,25 @@ impl Thread {
                             self.set_steering_angle(switching_start_angle.min(30.0).max(-30.0))?;
                         }
                     }
-                    let elapsed_seconds = switching_start_time.elapsed().as_secs_f32();
                     // println!("switching_state: {}", switching_state);
                     let steer = match &switching_state {
                         0 => {
                             //                    TODO/NOTE: This value depends on the robot's speed!
-                            let elapsed = (elapsed_seconds / self.config.seconds_to_straighten_out).min(1.0);
+                            let elapsed = if let Some(time) = switching_start_time {
+                                let elapsed_seconds = time.elapsed().as_secs_f32();
+                                elapsed_seconds / self.config.seconds_to_straighten_out
+                            } else {
+                                // TODO: Change unwrap()s!
+                                let rotations = self.motor_l1.get_position().unwrap() as f32 / self.motor_l1.get_count_per_rot().unwrap() as f32;
+                                rotations / self.config.rotations_to_straighten_out
+                            }.min(1.0);
                             if elapsed >= 1.0 {
                                 self.set_steering_angle(0.0)?;
+                                if let Some(_) = switching_start_time {
+                                    println!("[lane switch] switch init ended: time");
+                                } else {
+                                    println!("[lane switch] switch init ended: motor rotations");
+                                }
                                 switching_state += 1;
                                 Some(self.config.angle_lane_change_final.copysign(switching_start_angle))
                             } else {
@@ -430,6 +472,7 @@ impl Thread {
                             let brightness = self.read_color_sensor()?;
                             if brightness <= self.config.brightness_entering_black_line { // encountered a black line
                                 if brightness <= self.config.brightness_on_black_line {
+                                    println!("[lane switch] found line");
                                     switching_state += 1;
                                 }
                                 Some(self.config.angle_lane_change_encounter.copysign(switching_start_angle))
@@ -440,6 +483,7 @@ impl Thread {
                         2 => {
                             if self.read_color_sensor()? >= self.config.brightness_after_black_line { // slowly leaving black line again
                                 right_side_of_line_mode = switching_start_angle.is_sign_positive();
+                                println!("[lane switch] leaving line");
                                 switching_state += 1;
                                 Some(0.0)
                             } else {
@@ -448,14 +492,17 @@ impl Thread {
                         },
                         _ => {
                             new_state = Some(LinienfolgerState::Following(target_lane.clone()));
+                            limit_angle = true;
                             None
                         },
                     };
                     match steer {
                         Some(dir) => {
-                            let rotation_deg = self.read_gyro_sensor()?;
-                            let rotation_off = dir - rotation_deg as f32;
-                            self.set_steering_angle(rotation_off.max(-30.0).min(30.0))?;
+                            let rotation_deg = self.read_gyro_sensor()? as f32;
+                            println!("{} / {:.1}", rotation_deg, dir);
+                            let rotation_off = dir - rotation_deg;
+                            println!("-> {:.1}", rotation_off);
+                            self.set_steering_angle((2.0 * rotation_off).max(-30.0).min(30.0))?;
                         },
                         None => {},
                     }
@@ -498,6 +545,7 @@ pub enum Task {
     SwitchToLane(Lane),
     GetLane(std::sync::mpsc::Sender<Lane>),
     GetState(std::sync::mpsc::Sender<LinienfolgerState>),
+    SetErkennungSender(Option<mpsc::Sender<super::erkennung::Task>>),
 }
 
 #[derive(std::fmt::Debug)]

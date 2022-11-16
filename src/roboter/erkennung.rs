@@ -91,6 +91,7 @@ impl Thread {
     }
 
     fn run_sync(&mut self) -> Result<(), StopReason> {
+        _ = self.send_to_linienfolger.send(LfTask::SetErkennungSender(Some(self.sender.clone())));
         let mut lane = { // idk which lane we start on, but linienfolger does!
             let (s, r) = std::sync::mpsc::channel();
             self.send_to_linienfolger.send(LfTask::GetLane(s)).unwrap();
@@ -99,7 +100,10 @@ impl Thread {
         loop {
             while let Ok(recv) = self.receiver.try_recv() {
                 match recv {
-                    Task::SetLaneTo(new_lane) => lane = new_lane,
+                    Task::SetLaneTo(new_lane) => {
+                        println!("Forced lane change! {:?}", new_lane);
+                        lane = new_lane;
+                    }
                 }
             }
             let dist = self.read_distance_sensor()?;
@@ -121,7 +125,12 @@ impl Thread {
                     match r.recv().unwrap() {
                         crate::roboter::linienfolger::LinienfolgerState::Stopped => break None,
                         crate::roboter::linienfolger::LinienfolgerState::Following(lane) => break Some(lane),
-                        crate::roboter::linienfolger::LinienfolgerState::Switching(..) => continue,
+                        crate::roboter::linienfolger::LinienfolgerState::Switching(..) => {
+                            if self.read_distance_sensor()? < 5.0 {
+                                _ = self.send_to_linienfolger.send(LfTask::Stop);
+                            }
+                            continue;
+                        },
                     }
                 };
                 if let Some(new_lane) = new_lane {

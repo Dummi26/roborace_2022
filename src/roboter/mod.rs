@@ -116,12 +116,15 @@ impl Robot {
                     angle_lane_change_start: if let Some(v) = identifier_state.get("linienfolger angle lange change start") {
                         match v.parse() { Ok(v) => v, Err(e) => { println!("linienfolger angle lange change start: failed to parse ({e}); [30.0]"); 30.0 } }
                     } else { println!("linienfolger angle lange change start: [30.0]"); 30.0 },
+                    rotations_to_straighten_out: if let Some(v) = identifier_state.get("linienfolger rotations to straighten out") {
+                        match v.parse() { Ok(v) => v, Err(e) => { println!("linienfolger rotations to straighten out: failed to parse ({e}); [3.0]"); 3.0 } }
+                    } else { println!("linienfolger seconds to straighten out: [3.0]"); 3.0 },
                     seconds_to_straighten_out: if let Some(v) = identifier_state.get("linienfolger seconds to straighten out") {
                         match v.parse() { Ok(v) => v, Err(e) => { println!("linienfolger seconds to straighten out: failed to parse ({e}); [0.7]"); 0.7 } }
                     } else { println!("linienfolger seconds to straighten out: [0.7]"); 0.7 },
-                    angle_lane_change_final: if let Some(v) = identifier_state.get("linienfolger angle lange change final") {
-                        match v.parse() { Ok(v) => v, Err(e) => { println!("linienfolger angle lange change final: failed to parse ({e}); [30.0]"); 6.0 } }
-                    } else { println!("linienfolger angle lange change final: [30.0]"); 6.0 },
+                    angle_lane_change_final: if let Some(v) = identifier_state.get("linienfolger angle lane change final") {
+                        match v.parse() { Ok(v) => v, Err(e) => { println!("linienfolger angle lane change final: failed to parse ({e}); [6.0]"); 6.0 } }
+                    } else { println!("linienfolger angle lane change final: [6.0]"); 6.0 },
                     brightness_entering_black_line: if let Some(v) = identifier_state.get("linienfolger brightness entering black line") {
                         match v.parse() { Ok(v) => v, Err(e) => { println!("linienfolger brightness entering black line: failed to parse ({e}); [60]"); 60 } }
                     } else { println!("linienfolger brightness entering black line: [60]"); 60 },

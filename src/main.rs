@@ -16,6 +16,7 @@ mod test;
 mod imagehelper;
 
 fn main() {
+    // println!("c/rot: {}", ev3dev_lang_rust::motors::LargeMotor::find().unwrap().get_count_per_rot().unwrap()); return;
     let mut screen = Screen::new();
     let mut image_keeper = imagehelper::ImageKeeper::new();
     loop {
@@ -41,7 +42,7 @@ fn main() {
             robot = Some(roboter::Robot::new(
                 match std::fs::read_to_string("/home/robot/school/assets/robot.conf") {
                     Ok(v) => v,
-                    Err(e) => String::new(),
+                    Err(_) => String::new(),
                 }
             ));
         }
@@ -52,8 +53,8 @@ fn main() {
             test::gui::main(sender, info);
         }
         #[cfg(not(feature="pc_test"))] {
-            match main_ev3(robot) {
-                Ok(_) => {},
+            match main_ev3(&mut robot) {
+                Ok(_) => (),
                 Err(e) => {
                     if let Ok(screen) = &mut screen {
                         let img = match &e {
@@ -70,20 +71,32 @@ fn main() {
                                 screen.image.put_pixel(x, y, *px);
                             }
                             screen.update();
+                            println!("{:?}", e);
                         } else {
                             println!("Error initializing the program:\n - - - - -\n{:?}\n - - - - -\nExiting in 5 seconds.", e);
                         }
                     }
-                    std::thread::sleep(std::time::Duration::from_secs(5));
-                    return;
+                    match e {
+                        CustomError::FailedToInitializeLinienfolger(roboter::linienfolger::InitError::MissingDevice(_))
+                        | CustomError::FailedToInitializeErkennung(roboter::erkennung::InitError::MissingDevice(_))
+                        => {
+                            std::thread::sleep(std::time::Duration::from_millis(500));
+                            continue;
+                        },
+                        _ => {
+                            std::thread::sleep(std::time::Duration::from_secs(5));
+                            return;
+                        },
+                    }
                 },
             };
+            break;
         }
-        break; // unless continue was called, break out of the loop.
+        // break; // unless continue was called, break out of the loop.
     }
 }
 
-fn main_ev3(mut robot: roboter::Robot) -> Result<(), CustomError> {
+fn main_ev3(robot: &mut roboter::Robot) -> Result<(), CustomError> {
     let sender = robot.thread_linienfolger()?;
     robot.thread_erkennung()?;
     std::thread::spawn(move || {
