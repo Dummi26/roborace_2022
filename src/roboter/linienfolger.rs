@@ -33,10 +33,16 @@ pub struct Thread {
 }
 #[derive(Clone)]
 pub struct Config {
-    /// [60] The speed at which the robot moves forward.
-    pub default_speed_in_percent: i32,
-    /// [2.5] If 0, steering is proportional to brightness
-    pub importance_of_brightness_change: f32,
+    /// [60] The highest speed at which the robot will move.
+    pub max_speed_in_percent: i32,
+    /// [0.6] How much the robot will decelerate when the color sensor deviates too far from 50% brightness. 0.0 means to always go full speed, 1.0 allows the robot to stop completely (which will cause it to swing the color sensor left and right until it finds a line. If the line is out of reach, the robot will be stuck). 0.6 Means the robots motor speed will never drop below 40% max speed in line following mode
+    pub decelerate_max_factor: f64,
+    /// [0.009] How fast the robot will accelerate. This is a factor that weights how far the robot needs to be on/off the line to cause significant speed changes
+    pub acceleration_factor: f64,
+    /// [0.012] How fast the robot will decelerate - see acceleration_factor
+    pub deceleration_factor: f64,
+    /// [50] The speed the robot will use when switching lanes.
+    pub lane_switch_speed: i32,
     /// [30.0] Steering angle when changing from one lane to another, in degrees
     pub angle_lane_change_start: f32,
     /// [3.0] Like seconds_to_straighten_out, but this is preferred.
@@ -202,8 +208,22 @@ impl Thread {
     }
     
     #[cfg(not(feature="pc_test"))]
-    fn set_sensor_angle(angle: f64) -> Result<(), StopReason> {
-        todo!()
+    fn set_sensor_angle(&self, angle: f64) -> Result<(), StopReason> {
+        const GEARS: f64 = 20.0 / 12.0; // number of 1° turns of the motor required to turn the sensor by 1°
+        let mut attempts = 0;
+        loop {
+            match self.motor_sensor.run_to_abs_pos(Some((angle * GEARS).round() as i32)) {
+                Ok(()) => return Ok(()),
+                Err(_) => {
+                    if attempts < self.max_number_of_retries_on_communication_failure.0 {
+                        attempts += 1;
+                        std::thread::sleep(self.max_number_of_retries_on_communication_failure.1);
+                    } else {
+                        return Err(StopReason::DeviceFailedToRespond(Device::LargeMotorSensor));
+                    }
+                },
+            }
+        }
     }
 
     #[cfg(not(feature="pc_test"))]
@@ -359,7 +379,7 @@ impl Thread {
                         let brightness = self.read_color_sensor()?;
                         // speed factor
                         let br_diff = (brightness - 50) as f64 / 50.0;
-                        let desired_speed_factor = 1.0 - 0.6 * br_diff;
+                        let desired_speed_factor = 1.0 - self.config.decelerate_max_factor * br_diff;
                         speed_factor +=
                             if speed_factor < desired_speed_factor { // increasing speed [0.004 | 0.01]
                                 0.009 * (desired_speed_factor - speed_factor)
@@ -368,7 +388,7 @@ impl Thread {
                             }
                         ;
                         // println!("Speed factor: {:.2}", speed_factor);
-                        self.set_speed((speed_factor * self.config.default_speed_in_percent as f64).round() as _)?;
+                        self.set_speed((speed_factor * self.config.max_speed_in_percent as f64).round() as _)?;
                         // steering
                         let steering_angle = self.get_steering_angle()?;
                         let max_angle = 30.0;
@@ -453,6 +473,7 @@ impl Thread {
                         if switching_start_angle == 0.0 {
                             new_state = Some(LinienfolgerState::Following(target_lane.clone()));
                         } else {
+                            self.set_speed(self.config.lane_switch_speed)?;
                             self.set_steering_angle(switching_start_angle.min(30.0).max(-30.0))?;
                         }
                     }
@@ -482,7 +503,7 @@ impl Thread {
                                     (switching_start_angle * (1.0 - elapsed)
                                     + elapsed * self.config.angle_lane_change_final.copysign(switching_start_angle))
                                     // .min(30.0).max(-30.0) /* since this isn't directly influencing the steering angle, we don't necessarily need this (although it might be useful) */
-                                    // NOTE: I REMOVED THIS WITHOUT TESTING
+                                    // NOTE: I REMOVED THIS WITHOUT TESTING (but it seems to work)
                                 )
                             }
                         },
@@ -510,6 +531,7 @@ impl Thread {
                         },
                         _ => {
                             new_state = Some(LinienfolgerState::Following(target_lane.clone()));
+                            speed_factor = self.config.lane_switch_speed as f64 / self.config.max_speed_in_percent as f64;
                             limit_angle = true;
                             None
                         },

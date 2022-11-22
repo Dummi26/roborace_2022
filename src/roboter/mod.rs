@@ -107,12 +107,21 @@ impl Robot {
             // Set configs
             (
                 linienfolger::Config {
-                    default_speed_in_percent: if let Some(v) = identifier_state.get("linienfolger default speed") {
-                        match v.parse() { Ok(v) => v, Err(e) => { println!("linienfolger default speed: failed to parse ({e}); [60]"); 60 } }
-                    } else { println!("linienfolger default speed: [60]"); 60 },
-                    importance_of_brightness_change: if let Some(v) = identifier_state.get("linienfolger importance of brightness change") {
-                        match v.parse() { Ok(v) => v, Err(e) => { println!("linienfolger importance of brightness change: failed to parse ({e}); [2.5]"); 2.5 } }
-                    } else { println!("linienfolger importance of brightness change: [2.5]"); 2.5 },
+                    max_speed_in_percent: if let Some(v) = identifier_state.get("linienfolger max speed") {
+                        match v.parse() { Ok(v) => v, Err(e) => { println!("linienfolger max speed: failed to parse ({e}); [60]"); 60 } }
+                    } else { println!("linienfolger max speed: [60]"); 60 },
+                    decelerate_max_factor: if let Some(v) = identifier_state.get("linienfolger decelerate max factor") {
+                        match v.parse() { Ok(v) => v, Err(e) => { println!("linienfolger decelerate max factor: failed to parse ({e}); [0.6]"); 0.6 } }
+                    } else { println!("linienfolger decelerate max factor: [0.6]"); 0.6 },
+                    acceleration_factor: if let Some(v) = identifier_state.get("linienfolger acceleration factor") {
+                        match v.parse() { Ok(v) => v, Err(e) => { println!("linienfolger acceleration factor: failed to parse ({e}); [0.009]"); 0.009 } }
+                    } else { println!("linienfolger acceleration factor: [0.009]"); 0.009 },
+                    deceleration_factor: if let Some(v) = identifier_state.get("linienfolger deceleration factor") {
+                        match v.parse() { Ok(v) => v, Err(e) => { println!("linienfolger deceleration factor: failed to parse ({e}); [0.012]"); 0.012 } }
+                    } else { println!("linienfolger deceleration factor: [0.012]"); 0.012 },
+                    lane_switch_speed: if let Some(v) = identifier_state.get("linienfolger lane switch speed") {
+                        match v.parse() { Ok(v) => v, Err(e) => { println!("linienfolger lane switch speed: failed to parse ({e}); [50]"); 50 } }
+                    } else { println!("linienfolger lane switch speed: [50]"); 50 },
                     angle_lane_change_start: if let Some(v) = identifier_state.get("linienfolger angle lange change start") {
                         match v.parse() { Ok(v) => v, Err(e) => { println!("linienfolger angle lange change start: failed to parse ({e}); [30.0]"); 30.0 } }
                     } else { println!("linienfolger angle lange change start: [30.0]"); 30.0 },
