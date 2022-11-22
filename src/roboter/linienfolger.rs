@@ -14,11 +14,11 @@ pub struct Thread {
     pub config: Config,
     pub max_number_of_retries_on_communication_failure: (u32, Duration),
     #[cfg(not(feature="pc_test"))]
-    pub motor_l1: LargeMotor,
+    pub motor_drive: LargeMotor,
     #[cfg(not(feature="pc_test"))]
-    pub motor_l2: LargeMotor,
+    pub motor_sensor: LargeMotor,
     #[cfg(not(feature="pc_test"))]
-    pub motor_med: MediumMotor,
+    pub motor_steer: MediumMotor,
     #[cfg(not(feature="pc_test"))]
     pub sensor_color: ColorSensor,
     #[cfg(not(feature="pc_test"))]
@@ -31,7 +31,7 @@ pub struct Thread {
     #[cfg(feature="pc_test")]
     pub virtual_robot: std::sync::mpsc::Sender<crate::test::virtual_robot::VirtualRequest>,
 }
-#[derive(Clone, )]
+#[derive(Clone)]
 pub struct Config {
     /// [60] The speed at which the robot moves forward.
     pub default_speed_in_percent: i32,
@@ -59,12 +59,12 @@ impl super::ThreadedFeature for Thread {
     type InitError = InitError;
     fn init(robot: &mut Robot) -> Result<Self, InitError> {
         #[cfg(not(feature="pc_test"))]
-        let motor_l1 = match robot.motor_l1.take() { Some(v) => v, None => {
-            return Err(InitError::MissingDevice(Device::LargeMotor1)); } };
+        let motor_l1 = match robot.motor_l2.take() { Some(v) => v, None => {
+            return Err(InitError::MissingDevice(Device::LargeMotorDrive)); } };
         #[cfg(not(feature="pc_test"))]
-        let motor_l2 = match robot.motor_l2.take() { Some(v) => v, None => {
+        let motor_l2 = match robot.motor_l1.take() { Some(v) => v, None => {
             robot.motor_l1 = Some(motor_l1);
-            return Err(InitError::MissingDevice(Device::LargeMotor2)); } };
+            return Err(InitError::MissingDevice(Device::LargeMotorSensor)); } };
         #[cfg(not(feature="pc_test"))]
         let motor_med = match robot.motor_med.take() { Some(v) => v, None => {
             robot.motor_l1 = Some(motor_l1);
@@ -94,11 +94,11 @@ impl super::ThreadedFeature for Thread {
             }
             match motor_l1.run_direct() {
                 Ok(()) => {},
-                Err(_e) => return Err(InitError::MissingDevice(Device::LargeMotor1)),
+                Err(_e) => return Err(InitError::MissingDevice(Device::LargeMotorDrive)),
             }
             match motor_l2.run_direct() {
                 Ok(()) => {},
-                Err(_e) => return Err(InitError::MissingDevice(Device::LargeMotor2)),
+                Err(_e) => return Err(InitError::MissingDevice(Device::LargeMotorSensor)),
             }
             match motor_med.set_stop_action("hold") {
                 Ok(()) => {},
@@ -115,16 +115,16 @@ impl super::ThreadedFeature for Thread {
             config: robot.config.0.clone(),
             max_number_of_retries_on_communication_failure: robot.max_number_of_retries_on_communication_failure.clone(),
             #[cfg(not(feature="pc_test"))]
-            motor_l1,
+            motor_drive: motor_l1,
             #[cfg(not(feature="pc_test"))]
-            motor_l2,
+            motor_sensor: motor_l2,
             #[cfg(not(feature="pc_test"))]
-            motor_med,
+            motor_steer: motor_med,
             #[cfg(not(feature="pc_test"))]
             sensor_color,
             #[cfg(not(feature="pc_test"))]
             sensor_gyro,
-            sleep_duration: Duration::from_millis(4), // max: 250Hz
+            sleep_duration: Duration::from_millis(2), // max: 500Hz (prev. 250)
             old_state: None,
             current_state: LinienfolgerState::Following(Lane::Center), // NOTE: Start lane defined here
             target_lane: Lane::Center,
@@ -135,9 +135,9 @@ impl super::ThreadedFeature for Thread {
     }
     fn clean(self, robot: &mut Robot) {
         #[cfg(not(feature="pc_test"))] {
-            robot.motor_l1 = Some(self.motor_l1);
-            robot.motor_l2 = Some(self.motor_l2);
-            robot.motor_med = Some(self.motor_med);
+            robot.motor_l1 = Some(self.motor_drive);
+            robot.motor_l2 = Some(self.motor_sensor);
+            robot.motor_med = Some(self.motor_steer);
             robot.sensor_color = Some(self.sensor_color);
         }
     }
@@ -181,51 +181,44 @@ impl Thread {
     #[cfg(not(feature="pc_test"))]
     fn set_steering_angle(&self, angle_deg: f32) -> Result<(), StopReason> {
         // println!("Steering {}°", angle_deg);
-        match self.motor_med.run_to_abs_pos(Some((angle_deg * 12.0).round() as i32)) {
+        match self.motor_steer.run_to_abs_pos(Some((angle_deg * 12.0).round() as i32)) {
             Ok(_) => Ok(()),
             Err(_) => Err(StopReason::DeviceFailedToRespond(Device::MediumMotor)),
         }
     }
+    // NOTE: Factor between motor and steering angle is used in 2 locations!
+    fn get_steering_angle(&self) -> Result<f32, StopReason> {
+        match self.motor_steer.get_position() {
+            Ok(v) => Ok(v as f32 / 12.0),
+            Err(_) => Err(StopReason::DeviceFailedToRespond(Device::MediumMotor)),
+        }
+    }
+
     #[cfg(feature="pc_test")]
     fn set_steering_angle(&self, angle_deg: f32) -> Result<(), StopReason> {
         // println!("Steering {}°", angle_deg);
         self.virtual_robot.send(VirtualRequest::SetTurningAngleDeg(angle_deg)).expect("Robot channel broke.");
         Ok(())
     }
+    
+    #[cfg(not(feature="pc_test"))]
+    fn set_sensor_angle(angle: f64) -> Result<(), StopReason> {
+        todo!()
+    }
 
     #[cfg(not(feature="pc_test"))]
     fn set_speed(&self, speed: i32) -> Result<(), StopReason> {
-        self.motor_l1.run_direct().ok();
-        self.motor_l2.run_direct().ok();
-        let (speed1, speed2) = (speed, speed);
+        self.motor_drive.run_direct().ok();
         let mut attempts = 0;
         loop {
-            match (self.motor_l1.set_duty_cycle_sp(speed1), self.motor_l2.set_duty_cycle_sp(speed2)) {
-                (Ok(()), Ok(())) => return Ok(()),
-                (Err(_), Ok(())) => loop {
-                    if attempts < self.max_number_of_retries_on_communication_failure.0 {
-                        attempts += 1;
-                        std::thread::sleep(self.max_number_of_retries_on_communication_failure.1);
-                        if self.motor_l1.set_duty_cycle_sp(speed1).is_ok() { return Ok(()); }
-                    } else {
-                        return Err(StopReason::DeviceFailedToRespond(Device::LargeMotor1));
-                    }
-                },
-                (Ok(()), Err(_)) => loop {
-                    if attempts < self.max_number_of_retries_on_communication_failure.0 {
-                        attempts += 1;
-                        std::thread::sleep(self.max_number_of_retries_on_communication_failure.1);
-                        if self.motor_l2.set_duty_cycle_sp(speed2).is_ok() { return Ok(()); }
-                    } else {
-                        return Err(StopReason::DeviceFailedToRespond(Device::LargeMotor2));
-                    }
-                },
-                (Err(_), Err(_)) => {
+            match self.motor_drive.set_duty_cycle_sp(-speed) {
+                Ok(()) => return Ok(()),
+                Err(_) => {
                     if attempts < self.max_number_of_retries_on_communication_failure.0 {
                         attempts += 1;
                         std::thread::sleep(self.max_number_of_retries_on_communication_failure.1);
                     } else {
-                        return Err(StopReason::DeviceFailedToRespond(Device::LargeMotor1)); // TODO: Two-Device-Failure!
+                        return Err(StopReason::DeviceFailedToRespond(Device::LargeMotorDrive));
                     }
                 },
             }
@@ -239,9 +232,9 @@ impl Thread {
 
     #[cfg(not(feature="pc_test"))]
     fn stop_motors(&self) {
-        self.motor_l1.stop().ok();
-        self.motor_l2.stop().ok();
-        self.motor_med.stop().ok();
+        self.motor_drive.stop().ok();
+        self.motor_sensor.stop().ok();
+        self.motor_steer.stop().ok();
     }
     #[cfg(feature="pc_test")]
     fn stop_motors(&self) {
@@ -313,8 +306,11 @@ impl Thread {
         // VARS
 
         // Following
-        let mut previous_brightness = 50;
-        let mut avg_change = 0.0;
+        let mut speed_factor = 0.0;
+        // let mut previous_brightness = 50;
+        // let mut avg_change = 0.0;
+        let mut near_edge = 0;
+        let mut near_edge_wait = 0;
 
         // Switching
         let mut switching_start_time: Option<std::time::Instant> = None;
@@ -325,8 +321,14 @@ impl Thread {
 
         // START
 
-        self.set_speed(self.config.default_speed_in_percent)?;
-
+        // {
+        //     let sleep = Duration::from_secs_f64(0.05);
+        //     for prog in 0..10 {
+        //         self.set_speed(prog * self.config.default_speed_in_percent / 10)?;
+        //         thread::sleep(sleep);
+        //     }
+        //     self.set_speed(self.config.default_speed_in_percent)?;
+        // }
         loop {
             while let Ok(recv) = self.receiver.try_recv() {
                 match recv {
@@ -351,68 +353,84 @@ impl Thread {
             let mut new_state = None;
             match &self.current_state { // ~NOTE~ This is where stuff happens ~NOTE~
                 LinienfolgerState::Stopped => return Err(StopReason::GracefullyStoppedForInternalReasons()),
-                LinienfolgerState::Following(_lane) => {
+                LinienfolgerState::Following(_) => {
                     // Linienverfolgung
                     {
-                        let detected_brightness = self.read_color_sensor()?;
-                        avg_change = avg_change * 0.7 + 0.3 * ((detected_brightness - previous_brightness) as f32);
-                        let expected_brightness_soon = (detected_brightness + previous_brightness) as f32 / 2.0 + (self.config.importance_of_brightness_change + 0.5 /* because we average with previous_brightness */) * avg_change;
-                        let brightness_diff = expected_brightness_soon - 50.0;
-                        let max_angle = if limit_angle {
-                            if let Some(time) = switching_start_time {
-                                let el = time.elapsed().as_secs_f32();
-                                if el > 0.5 { limit_angle = false; println!("[following] angle limit removed - time"); }
-                                10.0
-                            } else {
-                                // TODO!
-                                if self.motor_l1.get_position().unwrap() as f32 / self.motor_l1.get_count_per_rot().unwrap() as f32 > 0.8 {
-                                    limit_angle = false;
-                                    println!("[following] angle limit removed - motor rotations");
-                                }
-                                10.0
+                        let brightness = self.read_color_sensor()?;
+                        // speed factor
+                        let br_diff = (brightness - 50) as f64 / 50.0;
+                        let desired_speed_factor = 1.0 - 0.6 * br_diff;
+                        speed_factor +=
+                            if speed_factor < desired_speed_factor { // increasing speed [0.004 | 0.01]
+                                0.009 * (desired_speed_factor - speed_factor)
+                            } else { // slowing down
+                                0.012 * (desired_speed_factor - speed_factor)
+                            }
+                        ;
+                        // println!("Speed factor: {:.2}", speed_factor);
+                        self.set_speed((speed_factor * self.config.default_speed_in_percent as f64).round() as _)?;
+                        // steering
+                        let steering_angle = self.get_steering_angle()?;
+                        let max_angle = 30.0;
+
+                        // If steering very far in one direction for a while still doesnt let me find the line, assume right_side_of_line_mode is wrong and invert it.
+                        if near_edge_wait > 0 {
+                            near_edge_wait += 1;
+                            if near_edge_wait > 40 {
+                                near_edge_wait = 0;
+                            }
+                        } else if steering_angle.abs() > 0.9 * max_angle { // near the edge
+                            if near_edge < 100 {
+                                near_edge += 1;
                             }
                         } else {
-                            30.0
-                        };
-                        let steer = brightness_diff.min(max_angle).max(-max_angle) as f32;
-                        self.set_steering_angle(if right_side_of_line_mode { -steer } else { steer })?;
-                        previous_brightness = detected_brightness;
+                            if near_edge > 0 {
+                                near_edge -= 1;
+                            }
+                        }
+                        if near_edge > 97 {
+                            right_side_of_line_mode = !right_side_of_line_mode;
+                            near_edge = 0;
+                            near_edge_wait = 1; // prevent near_edge from approaching 100 for a while because the steering mechanism takes some time to go from one extreme position to the other
+                        }
+
+                        // [ -1.0 .. +1.0 ] How much we want to steer to the right
+                        let right = (if right_side_of_line_mode { 50 - brightness } else { brightness - 50 } as f32 / 30.0).min(1.0).max(-1.0);
+                        // let right = (right * right).copysign(right);
+                        if right.abs() > 0.01 { // more than 0.5% of brightness difference
+                            // apply new angle [NOTE: The factor on *right* is the steering intensity
+                            self.set_steering_angle((steering_angle + 0.3 * right).min(max_angle).max(-max_angle))?;
+                        }
                     }
                     // {
-                    //     let detected_color = self.read_color_sensor()?;
-                    //     // println!("[Color Sensor] read {}.", detected_color);
-                    //     // println!("Change: {}", avg_change);
-                    // 
-                    //     // Bright -> Away
-                    //     // Dark -> Line
-                    //     avg_change = avg_change * 0.8 + 0.2 * ((detected_color - previous_brightness) as f32 / 10.0).max(-1.0).min(1.0);
-                    //     let brightness_diff = detected_color - 50;
-                    //     let turn_factor = (brightness_diff as f32 / 40.0).max(-1.0).min(1.0);
-                    //     // POSITIVE -> Steer normal, NEGATIVE -> Steer away from line
-                    //     let change_factor = if avg_change >= 0.0 && turn_factor >= 0.0 {
-                    //         if avg_change > 0.4 {
-                    //             println!("going the wrong way... (line :: {:.2})", avg_change);
+                    //     let detected_brightness = self.read_color_sensor()?;
+                    //     avg_change = avg_change * 0.7 + 0.3 * ((detected_brightness - previous_brightness) as f32);
+                    //     let expected_brightness_soon = (detected_brightness + previous_brightness) as f32 / 2.0 + (self.config.importance_of_brightness_change + 0.5 /* because we average with previous_brightness */) * avg_change;
+                    //     let brightness_diff = expected_brightness_soon - 50.0;
+                    //     let max_angle = if limit_angle {
+                    //         if let Some(time) = switching_start_time {
+                    //             let el = time.elapsed().as_secs_f32();
+                    //             if el > 0.5 { limit_angle = false; println!("[following] angle limit removed - time"); }
+                    //             10.0
+                    //         } else {
+                    //             // TODO!
+                    //             if self.motor_drive.get_position().unwrap() as f32 / self.motor_drive.get_count_per_rot().unwrap() as f32 > 0.8 {
+                    //                 limit_angle = false;
+                    //                 println!("[following] angle limit removed - motor rotations");
+                    //             }
+                    //             10.0
                     //         }
-                    //         1.0 + 12.0 * avg_change * avg_change
-                    //     } else if avg_change >= 0.0 {
-                    //         0.5 - 1.5 * avg_change.abs()
-                    //     } else if turn_factor >= 0.0 {
-                    //         0.5 - 1.5 * avg_change.abs()
                     //     } else {
-                    //         if -avg_change > 0.4 {
-                    //             println!("going the wrong way... (line :: {:.2})", -avg_change);
-                    //         }
-                    //         1.0 + 12.0 * avg_change * avg_change
+                    //         30.0
                     //     };
-                    //     // println!("Factor: {:.2} | Turn: {:.2}", change_factor, turn_factor);
-                    //     let angle = (change_factor * turn_factor * 20.0).max(-40.0).min(40.0);
-                    //     self.set_steering_angle(if right_side_of_line_mode { -angle } else { angle })?;
-                    //     previous_brightness = detected_color;
+                    //     let steer = brightness_diff.min(max_angle).max(-max_angle) as f32;
+                    //     self.set_steering_angle(if right_side_of_line_mode { -steer } else { steer })?;
+                    //     previous_brightness = detected_brightness;
                     // }
                 },
                 LinienfolgerState::Switching(prev_lane, target_lane, _max_distance) => {
                     if let Some(_old_state) = self.old_state.take() {
-                        if let Ok(_) = self.motor_l1.set_position(0) {
+                        if let Ok(_) = self.motor_drive.set_position(0) {
                             switching_start_time = None;
                         } else {
                             switching_start_time = Some(std::time::Instant::now());
@@ -447,7 +465,7 @@ impl Thread {
                                 elapsed_seconds / self.config.seconds_to_straighten_out
                             } else {
                                 // TODO: Change unwrap()s!
-                                let rotations = self.motor_l1.get_position().unwrap() as f32 / self.motor_l1.get_count_per_rot().unwrap() as f32;
+                                let rotations = self.motor_drive.get_position().unwrap() as f32 / self.motor_drive.get_count_per_rot().unwrap() as f32;
                                 rotations / self.config.rotations_to_straighten_out
                             }.min(1.0);
                             if elapsed >= 1.0 {
@@ -566,8 +584,8 @@ pub enum InitError {
 
 #[derive(std::fmt::Debug)]
 pub enum Device {
-    LargeMotor1,
-    LargeMotor2,
+    LargeMotorDrive,
+    LargeMotorSensor,
     MediumMotor,
     ColorSensor,
     GyroSensor,

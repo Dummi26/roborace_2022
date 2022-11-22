@@ -145,7 +145,13 @@ impl Robot {
                 },
             )
         };
-        let mut large_motors = match LargeMotor::list() { Ok(v) => v.into_iter(), Err(_) => vec![].into_iter() };
+        let mut large_motors = vec![];
+        for port in [ev3dev_lang_rust::motors::MotorPort::OutA, ev3dev_lang_rust::motors::MotorPort::OutB, ev3dev_lang_rust::motors::MotorPort::OutC, ev3dev_lang_rust::motors::MotorPort::OutD] {
+            if let Ok(motor) = LargeMotor::get(port) {
+                large_motors.push(motor);
+            }
+        }
+        let mut large_motors = large_motors.into_iter();
         Self {
             max_number_of_retries_on_communication_failure: (0, Duration::ZERO),
             thread_linienfolger: Thread::None,
@@ -231,8 +237,8 @@ impl Robot {
 }
 
 pub enum Device {
-    LargeMotor1,
-    LargeMotor2,
+    LargeMotorDrive,
+    LargeMotorSensor,
     MediumMotor,
     ColorSensor,
     GyroSensor,
@@ -241,8 +247,8 @@ pub enum Device {
 }
 impl From<&linienfolger::Device> for Device {
     fn from(dev: &linienfolger::Device) -> Self { match dev {
-        linienfolger::Device::LargeMotor1 => Self::LargeMotor1,
-        linienfolger::Device::LargeMotor2 => Self::LargeMotor2,
+        linienfolger::Device::LargeMotorDrive => Self::LargeMotorDrive,
+        linienfolger::Device::LargeMotorSensor => Self::LargeMotorSensor,
         linienfolger::Device::MediumMotor => Self::MediumMotor,
         linienfolger::Device::ColorSensor => Self::ColorSensor,
         linienfolger::Device::GyroSensor => Self::GyroSensor,

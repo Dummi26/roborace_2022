@@ -24,8 +24,8 @@ impl ImageKeeper {
     } }
     pub fn get_err_missing_dev(&mut self, dev: &crate::roboter::Device) -> Option<&mut DynamicImage> {
         match dev {
-            crate::roboter::Device::LargeMotor1 => self.image_err_missing_motor_gros.get(),
-            crate::roboter::Device::LargeMotor2 => self.image_err_missing_motor_gros.get(),
+            crate::roboter::Device::LargeMotorDrive => self.image_err_missing_motor_gros.get(),
+            crate::roboter::Device::LargeMotorSensor => self.image_err_missing_motor_gros.get(),
             crate::roboter::Device::MediumMotor => self.image_err_missing_motor_klein.get(),
             crate::roboter::Device::ColorSensor => self.image_err_missing_farbsensor.get(),
             crate::roboter::Device::GyroSensor => self.image_err_missing_gyrosensor.get(),
