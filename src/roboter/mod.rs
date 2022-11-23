@@ -4,6 +4,7 @@ use ev3dev_lang_rust::{motors::{LargeMotor, MediumMotor}, sensors::{ColorSensor,
 
 pub mod linienfolger;
 pub mod erkennung;
+pub mod screen;
 
 pub struct Robot {
     // Settings
@@ -14,6 +15,8 @@ pub struct Robot {
     /// Takes control of all motors required for driving and attempts to follow a black line on the floor based on the color sensor's readings.
     thread_linienfolger: Thread<linienfolger::Thread, linienfolger::Task, linienfolger::StopReason>,
     thread_erkennung: Thread<erkennung::Thread, erkennung::Task, erkennung::StopReason>,
+
+    pub screen: Option<mpsc::Sender<screen::Task>>,
 
     // Components
     pub motor_l1: Option<LargeMotor>,
@@ -165,6 +168,7 @@ impl Robot {
             max_number_of_retries_on_communication_failure: (0, Duration::ZERO),
             thread_linienfolger: Thread::None,
             thread_erkennung: Thread::None,
+            screen: None,
             motor_l1: large_motors.next(),
             motor_l2: large_motors.next(),
             motor_med: MediumMotor::find().ok(),

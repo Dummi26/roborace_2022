@@ -2,6 +2,8 @@ use std::{sync::mpsc, thread, time::Duration};
 
 use ev3dev_lang_rust::{motors::{LargeMotor, MediumMotor}, sensors::{ColorSensor, GyroSensor}};
 
+use super::screen::Task as ScTask;
+
 use super::Robot;
 
 #[cfg(feature="pc_test")]
@@ -10,6 +12,7 @@ use crate::test::virtual_robot::VirtualRequest;
 pub struct Thread {
     pub sender: mpsc::Sender<Task>,
     pub receiver: mpsc::Receiver<Task>,
+    screen: Option<mpsc::Sender<super::screen::Task>>,
     pub erkennung_sender: Option<mpsc::Sender<super::erkennung::Task>>,
     pub config: Config,
     pub max_number_of_retries_on_communication_failure: (u32, Duration),
@@ -117,6 +120,7 @@ impl super::ThreadedFeature for Thread {
         Ok(Self {
             sender,
             receiver,
+            screen: robot.screen.clone(),
             erkennung_sender: None,
             config: robot.config.0.clone(),
             max_number_of_retries_on_communication_failure: robot.max_number_of_retries_on_communication_failure.clone(),
@@ -261,6 +265,38 @@ impl Thread {
         println!("Stopping motors.");
     }
 
+    fn get_motor_rotations(&self) -> f32 { // TODO: remove unwraps
+        self.motor_drive.get_position().unwrap() as f32 / self.motor_drive.get_count_per_rot().unwrap() as f32
+    }
+
+    pub fn wait_for_time(&self, duration: Duration) -> WaitFor {
+        WaitFor::Time(std::time::Instant::now(), duration)
+    }
+    pub fn wait_for_rotations(&self, rotations: f32) -> WaitFor {
+        WaitFor::Rotations(self.get_motor_rotations(), rotations)
+    }
+    pub fn progress(&self, wait_for: &mut WaitFor) -> Option<f32> {
+        match wait_for {
+            WaitFor::None => None,
+            WaitFor::Time(time, duration) => {
+                let elapsed = time.elapsed().as_secs_f32();
+                let dur = duration.as_secs_f32();
+                if elapsed >= dur {
+                    *wait_for = WaitFor::None;
+                }
+                Some(elapsed / dur)
+            },
+            WaitFor::Rotations(start, goal) => {
+                let rotations = (self.get_motor_rotations() - *start).abs();
+                let goal = *goal;
+                if rotations >= goal {
+                    *wait_for = WaitFor::None;
+                }
+                Some(rotations / goal)
+            },
+        }
+    }
+
     fn set_state(&mut self, state: LinienfolgerState) {
         println!("Switching state: {:?}", state);
         self.old_state = Some(std::mem::replace(&mut self.current_state, state));
@@ -330,7 +366,7 @@ impl Thread {
         // let mut previous_brightness = 50;
         // let mut avg_change = 0.0;
         let mut near_edge = 0;
-        let mut near_edge_wait = 0;
+        let mut near_edge_wait = WaitFor::None;
 
         // Switching
         let mut switching_start_time: Option<std::time::Instant> = None;
@@ -373,12 +409,12 @@ impl Thread {
             let mut new_state = None;
             match &self.current_state { // ~NOTE~ This is where stuff happens ~NOTE~
                 LinienfolgerState::Stopped => return Err(StopReason::GracefullyStoppedForInternalReasons()),
-                LinienfolgerState::Following(_) => {
+                LinienfolgerState::Following(lane) => {
                     // Linienverfolgung
                     {
                         let brightness = self.read_color_sensor()?;
                         // speed factor
-                        let br_diff = (brightness - 50) as f64 / 50.0;
+                        let br_diff = (brightness - 50).abs() as f64 / 50.0;
                         let desired_speed_factor = 1.0 - self.config.decelerate_max_factor * br_diff;
                         speed_factor +=
                             if speed_factor < desired_speed_factor { // increasing speed [0.004 | 0.01]
@@ -394,10 +430,9 @@ impl Thread {
                         let max_angle = 30.0;
 
                         // If steering very far in one direction for a while still doesnt let me find the line, assume right_side_of_line_mode is wrong and invert it.
-                        if near_edge_wait > 0 {
-                            near_edge_wait += 1;
-                            if near_edge_wait > 40 {
-                                near_edge_wait = 0;
+                        if let Some(_) = self.progress(&mut near_edge_wait) {
+                            if near_edge_wait.is_none() {
+                                if let Some(screen) = &self.screen { _ = screen.send(ScTask::ShowLines { lines: 3, robot_pos: Some((match lane { Lane::Left => 0.0, Lane::Center => 1.0, Lane::Right => 2.0 }, 0.2, 0.0)) }) }
                             }
                         } else if steering_angle.abs() > 0.9 * max_angle { // near the edge
                             if near_edge < 100 {
@@ -409,17 +444,17 @@ impl Thread {
                             }
                         }
                         if near_edge > 97 {
+                            if let Some(screen) = &self.screen { _ = screen.send(ScTask::ShowLines { lines: 3, robot_pos: None }) }
                             right_side_of_line_mode = !right_side_of_line_mode;
                             near_edge = 0;
-                            near_edge_wait = 1; // prevent near_edge from approaching 100 for a while because the steering mechanism takes some time to go from one extreme position to the other
+                            near_edge_wait = self.wait_for_time(Duration::from_secs_f32(0.4)); // prevent near_edge from approaching 100 for a while because the steering mechanism takes some time to go from one extreme position to the other
                         }
 
                         // [ -1.0 .. +1.0 ] How much we want to steer to the right
                         let right = (if right_side_of_line_mode { 50 - brightness } else { brightness - 50 } as f32 / 30.0).min(1.0).max(-1.0);
-                        // let right = (right * right).copysign(right);
                         if right.abs() > 0.01 { // more than 0.5% of brightness difference
                             // apply new angle [NOTE: The factor on *right* is the steering intensity
-                            self.set_steering_angle((steering_angle + 0.3 * right).min(max_angle).max(-max_angle))?;
+                            self.set_steering_angle((steering_angle + 0.2 * right * right.abs()).min(max_angle).max(-max_angle))?;
                         }
                     }
                     // {
@@ -475,6 +510,8 @@ impl Thread {
                         } else {
                             self.set_speed(self.config.lane_switch_speed)?;
                             self.set_steering_angle(switching_start_angle.min(30.0).max(-30.0))?;
+                            // NOTE: This only makes sense for one-line switching (not right to left)
+                            if let Some(screen) = &self.screen { _ = screen.send(ScTask::ShowLines { lines: 3, robot_pos: Some((match prev_lane { Lane::Left => 0.0, Lane::Center => 1.0, Lane::Right => 2.0 } + 0.3 * switching_start_angle, 0.5, 1.5f32.copysign(switching_start_angle))) }) }
                         }
                     }
                     // println!("switching_state: {}", switching_state);
@@ -486,8 +523,8 @@ impl Thread {
                                 elapsed_seconds / self.config.seconds_to_straighten_out
                             } else {
                                 // TODO: Change unwrap()s!
-                                let rotations = self.motor_drive.get_position().unwrap() as f32 / self.motor_drive.get_count_per_rot().unwrap() as f32;
-                                rotations / self.config.rotations_to_straighten_out
+                                let rotations = self.get_motor_rotations();
+                                rotations.abs() / self.config.rotations_to_straighten_out
                             }.min(1.0);
                             if elapsed >= 1.0 {
                                 self.set_steering_angle(0.0)?;
@@ -497,6 +534,7 @@ impl Thread {
                                     println!("[lane switch] switch init ended: motor rotations");
                                 }
                                 switching_state += 1;
+                                if let Some(screen) = &self.screen { _ = screen.send(ScTask::ShowLines { lines: 3, robot_pos: Some((match target_lane { Lane::Left => 0.0, Lane::Center => 1.0, Lane::Right => 2.0 } - 0.4 * switching_start_angle, 0.5, 0.75f32.copysign(switching_start_angle))) }) }
                                 Some(self.config.angle_lane_change_final.copysign(switching_start_angle))
                             } else {
                                 Some(
@@ -512,6 +550,7 @@ impl Thread {
                             if brightness <= self.config.brightness_entering_black_line { // encountered a black line
                                 if brightness <= self.config.brightness_on_black_line {
                                     println!("[lane switch] found line");
+                                    if let Some(screen) = &self.screen { _ = screen.send(ScTask::ShowLines { lines: 3, robot_pos: Some((match target_lane { Lane::Left => 0.0, Lane::Center => 1.0, Lane::Right => 2.0 } - 0.2 * switching_start_angle, 0.5, 0.75f32.copysign(switching_start_angle))) }) }
                                     switching_state += 1;
                                 }
                                 Some(self.config.angle_lane_change_encounter.copysign(switching_start_angle))
@@ -523,6 +562,7 @@ impl Thread {
                             if self.read_color_sensor()? >= self.config.brightness_after_black_line { // slowly leaving black line again
                                 right_side_of_line_mode = switching_start_angle.is_sign_positive();
                                 println!("[lane switch] leaving line");
+                                if let Some(screen) = &self.screen { _ = screen.send(ScTask::ShowLines { lines: 3, robot_pos: Some((match target_lane { Lane::Left => 0.0, Lane::Center => 1.0, Lane::Right => 2.0 } + 0.2 * switching_start_angle, 0.5, 0.0)) }) }
                                 switching_state += 1;
                                 Some(0.0)
                             } else {
@@ -531,6 +571,8 @@ impl Thread {
                         },
                         _ => {
                             new_state = Some(LinienfolgerState::Following(target_lane.clone()));
+                            near_edge = 0;
+                            near_edge_wait = self.wait_for_rotations(0.3); // TODO/NOTE: Change this value to one that works well
                             speed_factor = self.config.lane_switch_speed as f64 / self.config.max_speed_in_percent as f64;
                             limit_angle = true;
                             None
@@ -628,3 +670,9 @@ pub enum LinienfolgerState {
     /// Switching from [one lane |1] to [another |2], moving at most [3]m forward (if possible).
     Switching(Lane, Lane, f64),
 }
+
+enum WaitFor {
+    None,
+    Time(std::time::Instant, Duration),
+    Rotations(f32, f32),
+} impl WaitFor { pub fn is_none(&self) -> bool { match self { Self::None => true, _ => false } } }

@@ -97,6 +97,8 @@ fn main() {
 }
 
 fn main_ev3(robot: &mut roboter::Robot) -> Result<(), CustomError> {
+    let scr = crate::roboter::screen::Thread::new();
+    robot.screen = Some(scr.0);
     let sender = robot.thread_linienfolger()?;
     robot.thread_erkennung()?;
     std::thread::spawn(move || {
