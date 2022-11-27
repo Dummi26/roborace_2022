@@ -64,18 +64,18 @@ impl Thread {
     fn draw_robot(&mut self, x: f32, y: f32, w: f32, l: f32, rot: f32) {
         let (sin, cos) = (rot.sin(), rot.cos());
         let vec_right = (
-            cos * w,
-            sin * l,
+            cos * w / 2.0,
+            sin * l / 2.0,
         );
         let vec_forward = (
-            sin * w,
-            - cos * l,
+            sin * w / 2.0,
+            - cos * l / 2.0,
         );
         // rectangle: front/back/left/right
-        self.draw_line(x - vec_right.0 + vec_forward.0, y - vec_right.1 + vec_forward.1, x + vec_right.0 + vec_forward.0, y + vec_right.0 + vec_forward.0, 0);
-        self.draw_line(x - vec_right.0 - vec_forward.0, y - vec_right.1 - vec_forward.1, x + vec_right.0 - vec_forward.0, y + vec_right.0 - vec_forward.0, 0);
-        self.draw_line(x - vec_right.0 + vec_forward.0, y - vec_right.1 + vec_forward.1, x - vec_right.0 - vec_forward.0, y - vec_right.0 - vec_forward.0, 0);
-        self.draw_line(x + vec_right.0 + vec_forward.0, y + vec_right.1 + vec_forward.1, x + vec_right.0 - vec_forward.0, y + vec_right.0 - vec_forward.0, 0);
+        self.draw_line(x - vec_right.0 + vec_forward.0, y - vec_right.1 + vec_forward.1, x + vec_right.0 + vec_forward.0, y + vec_right.1 + vec_forward.1, 0);
+        self.draw_line(x - vec_right.0 - vec_forward.0, y - vec_right.1 - vec_forward.1, x + vec_right.0 - vec_forward.0, y + vec_right.1 - vec_forward.1, 0);
+        self.draw_line(x - vec_right.0 + vec_forward.0, y - vec_right.1 + vec_forward.1, x - vec_right.0 - vec_forward.0, y - vec_right.1 - vec_forward.1, 0);
+        self.draw_line(x + vec_right.0 + vec_forward.0, y + vec_right.1 + vec_forward.1, x + vec_right.0 - vec_forward.0, y + vec_right.1 - vec_forward.1, 0);
         // arrow: mid, left, right
         self.draw_line(x - 0.7 * vec_forward.0, y - 0.7 * vec_forward.1, x + 0.7 * vec_forward.0, y + 0.7 * vec_forward.1, 0);
         self.draw_line(x + 0.5 * vec_forward.0 + 0.2 * vec_forward.1, y + 0.5 * vec_forward.1 - 0.2 * vec_forward.0, x + 0.7 * vec_forward.0, y + 0.7 * vec_forward.1, 0);
@@ -93,13 +93,13 @@ impl Thread {
                         let y1 = Self::ya(0.8);
                         let y2 = Self::ya(0.2);
                         for line in 0..lines {
-                            let x = Self::xa(0.25 + 0.5 * line as f32 / lines as f32).round();
+                            let x = Self::xa(0.25 + 0.5 * line as f32 / (lines - 1) as f32).round();
                             self.draw_line(x, y1.round(), x, y2.round(), 0); // black lines
                         }
                         if let Some((line, y, rot)) = robot_pos {
-                            let y = (0.8 - y * 0.6).round();
-                            let x = (0.25 + 0.5 * line / (lines - 1) as f32).round();
-                            self.draw_robot(Self::xa(x), Self::ya(y), 15.0/*px*/, 20.0/*px*/, rot);
+                            let y = 0.8 - y * 0.6;
+                            let x = Self::xa(0.25 + 0.5 * line as f32 / (lines - 1) as f32).round();
+                            self.draw_robot(x, Self::ya(y), 20.0/*px*/, 30.0/*px*/, rot);
                         }
                         self.update();
                     },

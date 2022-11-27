@@ -31,6 +31,7 @@ pub struct Thread {
     current_state: LinienfolgerState,
     target_lane: Lane,
     target_lane_updated: bool,
+    max_speed: i32,
     #[cfg(feature="pc_test")]
     pub virtual_robot: std::sync::mpsc::Sender<crate::test::virtual_robot::VirtualRequest>,
 }
@@ -139,6 +140,7 @@ impl super::ThreadedFeature for Thread {
             current_state: LinienfolgerState::Following(Lane::Center), // NOTE: Start lane defined here
             target_lane: Lane::Center,
             target_lane_updated: false,
+            max_speed: 100,
             #[cfg(feature="pc_test")]
             virtual_robot: robot.pc_test_thread.1.clone(),
         })
@@ -231,7 +233,8 @@ impl Thread {
     }
 
     #[cfg(not(feature="pc_test"))]
-    fn set_speed(&self, speed: i32) -> Result<(), StopReason> {
+    fn set_speed(&self, mut speed: i32) -> Result<(), StopReason> {
+        if speed.abs() > self.max_speed { speed = self.max_speed * speed.signum(); }
         self.motor_drive.run_direct().ok();
         let mut attempts = 0;
         loop {
@@ -250,15 +253,20 @@ impl Thread {
     }
     #[cfg(feature="pc_test")]
     fn set_speed(&self, speed: i32) -> Result<(), StopReason> {
+        if speed.abs() > self.max_speed { speed = self.max_speed * speed.signum(); }
         _ = self.virtual_robot.send(crate::test::virtual_robot::VirtualRequest::SetSpeed(speed));
         Ok(())
     }
 
+    fn set_max_speed(&mut self, factor: f32) {
+        self.max_speed = (self.config.max_speed_in_percent as f32 * factor).round() as _;
+    }
+
     #[cfg(not(feature="pc_test"))]
     fn stop_motors(&self) {
-        self.motor_drive.stop().ok();
-        self.motor_sensor.stop().ok();
-        self.motor_steer.stop().ok();
+        _ = self.motor_drive.stop();
+        _ = self.motor_sensor.stop();
+        _ = self.motor_steer.stop();
     }
     #[cfg(feature="pc_test")]
     fn stop_motors(&self) {
@@ -359,6 +367,8 @@ impl Thread {
             }
         } { None => { println!("Couldn't determine which side of the line I am on, using default value."); true }, Some(v) => {println!("It seems I am on the {} side of the line.", if v { "right" } else { "left" }); v } };
 
+        self.set_max_speed(1.0);
+
         // VARS
 
         // Following
@@ -404,6 +414,8 @@ impl Thread {
                     Task::GetLane(sender) => _ = sender.send(self.target_lane.clone()),
                     Task::GetState(sender) => _ = sender.send(self.current_state.clone()),
                     Task::SetErkennungSender(s) => self.erkennung_sender = s,
+                    Task::SetMaxSpeedRel(factor) => self.set_max_speed(factor),
+                    Task::SetMaxSpeedAbs(speed) => self.max_speed = speed,
                 }
             }
             let mut new_state = None;
@@ -511,7 +523,7 @@ impl Thread {
                             self.set_speed(self.config.lane_switch_speed)?;
                             self.set_steering_angle(switching_start_angle.min(30.0).max(-30.0))?;
                             // NOTE: This only makes sense for one-line switching (not right to left)
-                            if let Some(screen) = &self.screen { _ = screen.send(ScTask::ShowLines { lines: 3, robot_pos: Some((match prev_lane { Lane::Left => 0.0, Lane::Center => 1.0, Lane::Right => 2.0 } + 0.3 * switching_start_angle, 0.5, 1.5f32.copysign(switching_start_angle))) }) }
+                            if let Some(screen) = &self.screen { _ = screen.send(ScTask::ShowLines { lines: 3, robot_pos: Some((match prev_lane { Lane::Left => 0.0, Lane::Center => 1.0, Lane::Right => 2.0 } + 0.3f32.copysign(switching_start_angle), 0.5, 0.5f32.copysign(switching_start_angle))) }) }
                         }
                     }
                     // println!("switching_state: {}", switching_state);
@@ -534,7 +546,7 @@ impl Thread {
                                     println!("[lane switch] switch init ended: motor rotations");
                                 }
                                 switching_state += 1;
-                                if let Some(screen) = &self.screen { _ = screen.send(ScTask::ShowLines { lines: 3, robot_pos: Some((match target_lane { Lane::Left => 0.0, Lane::Center => 1.0, Lane::Right => 2.0 } - 0.4 * switching_start_angle, 0.5, 0.75f32.copysign(switching_start_angle))) }) }
+                                if let Some(screen) = &self.screen { _ = screen.send(ScTask::ShowLines { lines: 3, robot_pos: Some((match target_lane { Lane::Left => 0.0, Lane::Center => 1.0, Lane::Right => 2.0 } - 0.4f32.copysign(switching_start_angle), 0.5, 0.25f32.copysign(switching_start_angle))) }) }
                                 Some(self.config.angle_lane_change_final.copysign(switching_start_angle))
                             } else {
                                 Some(
@@ -550,7 +562,7 @@ impl Thread {
                             if brightness <= self.config.brightness_entering_black_line { // encountered a black line
                                 if brightness <= self.config.brightness_on_black_line {
                                     println!("[lane switch] found line");
-                                    if let Some(screen) = &self.screen { _ = screen.send(ScTask::ShowLines { lines: 3, robot_pos: Some((match target_lane { Lane::Left => 0.0, Lane::Center => 1.0, Lane::Right => 2.0 } - 0.2 * switching_start_angle, 0.5, 0.75f32.copysign(switching_start_angle))) }) }
+                                    if let Some(screen) = &self.screen { _ = screen.send(ScTask::ShowLines { lines: 3, robot_pos: Some((match target_lane { Lane::Left => 0.0, Lane::Center => 1.0, Lane::Right => 2.0 } - 0.2f32.copysign(switching_start_angle), 0.5, 0.2f32.copysign(switching_start_angle))) }) }
                                     switching_state += 1;
                                 }
                                 Some(self.config.angle_lane_change_encounter.copysign(switching_start_angle))
@@ -562,7 +574,7 @@ impl Thread {
                             if self.read_color_sensor()? >= self.config.brightness_after_black_line { // slowly leaving black line again
                                 right_side_of_line_mode = switching_start_angle.is_sign_positive();
                                 println!("[lane switch] leaving line");
-                                if let Some(screen) = &self.screen { _ = screen.send(ScTask::ShowLines { lines: 3, robot_pos: Some((match target_lane { Lane::Left => 0.0, Lane::Center => 1.0, Lane::Right => 2.0 } + 0.2 * switching_start_angle, 0.5, 0.0)) }) }
+                                if let Some(screen) = &self.screen { _ = screen.send(ScTask::ShowLines { lines: 3, robot_pos: Some((match target_lane { Lane::Left => 0.0, Lane::Center => 1.0, Lane::Right => 2.0 } + 0.2f32.copysign(switching_start_angle), 0.5, 0.0)) }) }
                                 switching_state += 1;
                                 Some(0.0)
                             } else {
@@ -628,6 +640,8 @@ pub enum Task {
     GetLane(std::sync::mpsc::Sender<Lane>),
     GetState(std::sync::mpsc::Sender<LinienfolgerState>),
     SetErkennungSender(Option<mpsc::Sender<super::erkennung::Task>>),
+    SetMaxSpeedRel(f32),
+    SetMaxSpeedAbs(i32),
 }
 
 #[derive(std::fmt::Debug)]
