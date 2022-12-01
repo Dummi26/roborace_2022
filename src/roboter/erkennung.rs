@@ -1,6 +1,6 @@
 use std::{sync::mpsc, thread, time::Duration};
 
-use ev3dev_lang_rust::sensors::{TouchSensor, UltrasonicSensor};
+use ev3dev_lang_rust::{sensors::{TouchSensor, UltrasonicSensor}, motors::LargeMotor};
 
 use super::Robot;
 use super::linienfolger::Lane;
@@ -15,6 +15,8 @@ pub struct Thread {
     pub config: Config,
     pub send_to_linienfolger: mpsc::Sender<super::linienfolger::Task>,
     pub max_number_of_retries_on_communication_failure: (u32, Duration),
+    #[cfg(not(feature="pc_test"))]
+    pub motor_sensor: LargeMotor,
     #[cfg(not(feature="pc_test"))]
     pub sensor_distance: UltrasonicSensor,
     // #[cfg(not(feature="pc_test"))]
@@ -38,6 +40,10 @@ impl super::ThreadedFeature for Thread {
         let sensor_distance = match robot.sensor_ultraschall.take() { Some(v) => v, None => {
             return Err(InitError::MissingDevice(Device::UltrasonicSensor)); } };
         #[cfg(not(feature="pc_test"))]
+        let motor_l2 = match robot.motor_l1.take() { Some(v) => v, None => {
+            return Err(InitError::MissingDevice(Device::LargeMotorSensor)); } };
+        #[cfg(not(feature="pc_test"))]
+        // #[cfg(not(feature="pc_test"))]
         // let sensor_touch = match robot.sensor_touch.take() { Some(v) => v, None => {
         //     robot.sensor_ultraschall = Some(sensor_distance);
         //     return Err(InitError::MissingDevice(Device::TouchSensor)); } };
@@ -58,6 +64,8 @@ impl super::ThreadedFeature for Thread {
             max_number_of_retries_on_communication_failure: robot.max_number_of_retries_on_communication_failure.clone(),
             #[cfg(not(feature="pc_test"))]
             sensor_distance,
+            #[cfg(not(feature="pc_test"))]
+            motor_sensor: motor_l2,
             // #[cfg(not(feature="pc_test"))]
             // sensor_touch,
             sleep_duration: Duration::from_millis(20), // max: 50Hz
@@ -68,6 +76,7 @@ impl super::ThreadedFeature for Thread {
     fn clean(self, robot: &mut Robot) {
         #[cfg(not(feature="pc_test"))] {
             robot.sensor_ultraschall = Some(self.sensor_distance);
+            robot.motor_l1 = Some(self.motor_sensor);
         }
     }
 }
@@ -90,13 +99,58 @@ impl Thread {
         Ok(r.recv().expect("Answer channel broke."))
     }
 
+
+    #[cfg(not(feature="pc_test"))]
+    fn set_sensor_angle(&self, angle: f32) -> Result<(), StopReason> {
+        // const GEARS: f32 = 12.0 / 20.0;
+        const GEARS: f32 = 20.0 / 12.0;
+        let angle = (GEARS * angle).round() as i32;
+        // match self.motor_sensor.run_direct() {
+        //     Ok(()) => {},
+        //     Err(_e) => return Err(StopReason::DeviceFailedToRespond(Device::LargeMotorSensor)),
+        // }
+        let max = match self.motor_sensor.get_max_speed() {
+            Ok(v) => v,
+            Err(_e) => return Err(StopReason::DeviceFailedToRespond(Device::LargeMotorSensor)),
+        };
+        match self.motor_sensor.set_speed_sp(max) {
+            Ok(()) => {},
+            Err(_e) => return Err(StopReason::DeviceFailedToRespond(Device::LargeMotorSensor)),
+        }
+        _ = self.motor_sensor.set_ramp_up_sp(0);
+        self.motor_sensor.set_stop_action("hold").unwrap(); // or "brake"?
+        let mut attempts = 0;
+        println!("Turn by {} / {}.", angle, self.motor_sensor.get_count_per_rot().unwrap());
+        loop {
+            match self.motor_sensor.run_to_abs_pos(Some(angle)) {
+                Ok(()) => return Ok(()),
+                Err(_) => {
+                    if attempts < self.max_number_of_retries_on_communication_failure.0 {
+                        attempts += 1;
+                        std::thread::sleep(self.max_number_of_retries_on_communication_failure.1);
+                    } else {
+                        return Err(StopReason::DeviceFailedToRespond(Device::LargeMotorSensor));
+                    }
+                },
+            }
+        }
+    }
+
+    #[cfg(not(feature="pc_test"))]
+    fn get_sensor_pos(&self) -> i32 {
+        self.motor_sensor.get_position().unwrap()
+    }
+    
+
     fn run_sync(&mut self) -> Result<(), StopReason> {
+        // loop { println!("Distance: {:.1}", self.read_distance_sensor()?); }
         _ = self.send_to_linienfolger.send(LfTask::SetErkennungSender(Some(self.sender.clone())));
         let mut lane = { // idk which lane we start on, but linienfolger does!
             let (s, r) = std::sync::mpsc::channel();
             self.send_to_linienfolger.send(LfTask::GetLane(s)).unwrap();
             r.recv().unwrap()
         };
+        _ = self.motor_sensor.set_position(0);
         loop {
             while let Ok(recv) = self.receiver.try_recv() {
                 match recv {
@@ -109,13 +163,52 @@ impl Thread {
             let dist = self.read_distance_sensor()?;
             // println!("{:.1}cm", dist);
             if dist < self.config.distance_obstacle {
+                _ = self.send_to_linienfolger.send(LfTask::Pause(None));
+                let check_right = match lane {
+                    Lane::Left => true,
+                    Lane::Center => false,
+                    Lane::Right => false,
+                };
+                const ANGLE: f32 = 30.0;
+                const ANGLE_CHANGE: f32 = 4.0;
+                self.set_sensor_angle(if check_right { ANGLE } else { -ANGLE })?;
+                std::thread::sleep(Duration::from_secs_f64(1.0));
+                let mut far = 0;
+                let limit = 72.5;
+                for i in 0..4 {
+                    let angle = ANGLE + i as f32 * ANGLE_CHANGE;
+                    self.set_sensor_angle(if check_right { angle } else { -angle })?;
+                    std::thread::sleep(Duration::from_secs_f64(1.0));
+                    let dist = self.read_distance_sensor()?;
+                    println!("Dist: {:.1}", dist);
+                    if dist > limit { far += 1; }
+                }
+                println!("Far: {}", far);
+                let should_go_right = if far >= 2 {
+                    println!("No obstacle.");
+                    check_right
+                } else {
+                    println!("OBSTACLE!");
+                    !check_right
+                };
+                self.set_sensor_angle(0.0)?;
+                // self.set_sensor_angle(if should_go_right { -90.0 } else { 90.0 })?; // look towards the obstacle that was in front of us before (so we know when it has passed)
+                println!("We should probably go {}.", if should_go_right { "right" } else { "left" });
+                let should_steer_right = if match lane {
+                    Lane::Left => !should_go_right,
+                    Lane::Right => should_go_right, // right + should go right => go very left instead
+                    Lane::Center => false, // this is always fine
+                } {
+                    Some(!should_go_right) // invert if right and want to go even more right
+                } else {
+                    Some(should_go_right)
+                };
+                _ = self.send_to_linienfolger.send(LfTask::Pause(should_steer_right));
+                std::thread::sleep(Duration::from_secs_f64(0.5));
                 _ = self.send_to_linienfolger.send(LfTask::SwitchToLane(match lane {
-                    Lane::Left => Lane::Center,
-                    Lane::Center => Lane::Left,
-                    Lane::Right => {
-                        println!("HOW DID WE END UP ON THE RIGHT LANE????");
-                        Lane::Right
-                    },
+                    Lane::Left => if should_go_right { Lane::Center } else { Lane::Right },
+                    Lane::Center => if should_go_right { Lane::Right } else { Lane::Left },
+                    Lane::Right => if should_go_right { Lane::Left } else { Lane::Center },
                 }));
                 let delay = Duration::from_secs_f32(0.1);
                 let new_lane = loop {
@@ -124,8 +217,10 @@ impl Thread {
                     _ = self.send_to_linienfolger.send(LfTask::GetState(s));
                     match r.recv().unwrap() {
                         crate::roboter::linienfolger::LinienfolgerState::Stopped => break None,
+                        super::linienfolger::LinienfolgerState::Paused => break None,
                         crate::roboter::linienfolger::LinienfolgerState::Following(lane) => break Some(lane),
-                        crate::roboter::linienfolger::LinienfolgerState::Switching(..) => {
+                        crate::roboter::linienfolger::LinienfolgerState::Switching(..) |
+                        crate::roboter::linienfolger::LinienfolgerState::SwitchingFar(..) => {
                             if self.read_distance_sensor()? < 5.0 {
                                 _ = self.send_to_linienfolger.send(LfTask::Stop);
                             }
@@ -133,12 +228,16 @@ impl Thread {
                         },
                     }
                 };
+                thread::sleep(Duration::from_secs_f64(0.5)); // wait for the sensor to detect the obstacle
+                // while self.read_distance_sensor()? < 17.5 { thread::sleep(delay); } // wait for the obstacle to end
+                self.set_sensor_angle(0.0)?;
                 if let Some(new_lane) = new_lane {
                     println!("Passed the obstacle. New lane: {:?}", new_lane);
                     lane = new_lane;
                 } else {
                     println!("Stopped...? [!!]");
                 }
+                thread::sleep(Duration::from_secs_f64(2.5)); // wait (so we dont detect an obstacle twice)
             }
             thread::sleep(self.sleep_duration);
         };
@@ -187,4 +286,5 @@ pub enum InitError {
 pub enum Device {
     TouchSensor,
     UltrasonicSensor,
+    LargeMotorSensor,
 }

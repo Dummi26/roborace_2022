@@ -16,6 +16,7 @@ mod test;
 mod imagehelper;
 
 fn main() {
+    println!("\n\n\n\n\n\n\n\n\n");
     // println!("c/rot: {}", ev3dev_lang_rust::motors::LargeMotor::find().unwrap().get_count_per_rot().unwrap()); return;
     let mut screen = Screen::new();
     let mut image_keeper = imagehelper::ImageKeeper::new();

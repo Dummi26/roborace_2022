@@ -88,7 +88,7 @@ impl Thread {
                 Ok(task) => match task {
                     Task::Stop => break,
                     Task::Clear => self.screen.clear(),
-                    Task::ShowLines { lines, robot_pos } => {
+                    Task::ShowLines { lines, robot_pos, obstacles } => {
                         self.clear();
                         let y1 = Self::ya(0.8);
                         let y2 = Self::ya(0.2);
@@ -100,6 +100,19 @@ impl Thread {
                             let y = 0.8 - y * 0.6;
                             let x = Self::xa(0.25 + 0.5 * line as f32 / (lines - 1) as f32).round();
                             self.draw_robot(x, Self::ya(y), 20.0/*px*/, 30.0/*px*/, rot);
+                        }
+                        for obstacle in obstacles.iter() {
+                            match obstacle {
+                                Obstacle::Line(x, y, width) => {
+                                    self.draw_line(*x, *y, x + width, *y, 0);
+                                },
+                                Obstacle::Rect(x1, y1, x2, y2) => {
+                                    self.draw_line(*x1, *y1, *x2, *y1, 0);
+                                    self.draw_line(*x1, *y1, *x1, *y2, 0);
+                                    self.draw_line(*x1, *y2, *x2, *y2, 0);
+                                    self.draw_line(*x2, *y1, *x2, *y2, 0);
+                                },
+                            }
                         }
                         self.update();
                     },
@@ -115,5 +128,10 @@ pub enum Task {
     Stop,
     Clear,
     /// How many lines there are, on what line the robot is (integer values = on the line, .5 = between), how far up the robot is, and the robot's rotation in radians, where 0.0 is up and positive values turn the robot clockwise.
-    ShowLines { lines: i32, robot_pos: Option<(f32, f32, f32)> },
+    ShowLines { lines: i32, robot_pos: Option<(f32, f32, f32)>, obstacles: Vec<Obstacle> },
+}
+
+pub enum Obstacle {
+    Line(f32, f32, f32),
+    Rect(f32, f32, f32, f32),
 }

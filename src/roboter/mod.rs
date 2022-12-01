@@ -271,6 +271,7 @@ impl From<&erkennung::Device> for Device  {
     fn from(dev: &erkennung::Device) -> Self { match dev {
         erkennung::Device::TouchSensor => Self::TouchSensor,
         erkennung::Device::UltrasonicSensor => Self::UltrasonicSensor,
+        erkennung::Device::LargeMotorSensor => Self::LargeMotorSensor,
     } }
 }
 
