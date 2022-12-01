@@ -29,6 +29,8 @@ pub struct Thread {
 pub struct Config {
     /// [50.0] The distance (in cm) where, if we detect an obstacle, we start to switch to another lane
     pub distance_obstacle: f32,
+    /// You can specify the path here. (right instead of left | fast mode)
+    pub path: Vec<(bool, bool)>,
 }
 
 impl super::ThreadedFeature for Thread {
@@ -151,6 +153,7 @@ impl Thread {
             r.recv().unwrap()
         };
         _ = self.motor_sensor.set_position(0);
+        let mut predetermined_path = self.config.path.iter();
         loop {
             while let Ok(recv) = self.receiver.try_recv() {
                 match recv {
@@ -163,37 +166,52 @@ impl Thread {
             let dist = self.read_distance_sensor()?;
             // println!("{:.1}cm", dist);
             if dist < self.config.distance_obstacle {
-                _ = self.send_to_linienfolger.send(LfTask::Pause(None));
-                let check_right = match lane {
-                    Lane::Left => true,
-                    Lane::Center => false,
-                    Lane::Right => false,
-                };
-                const ANGLE: f32 = 30.0;
-                const ANGLE_CHANGE: f32 = 4.0;
-                self.set_sensor_angle(if check_right { ANGLE } else { -ANGLE })?;
-                std::thread::sleep(Duration::from_secs_f64(1.0));
-                let mut far = 0;
-                let limit = 72.5;
-                for i in 0..4 {
-                    let angle = ANGLE + i as f32 * ANGLE_CHANGE;
-                    self.set_sensor_angle(if check_right { angle } else { -angle })?;
-                    std::thread::sleep(Duration::from_secs_f64(1.0));
-                    let dist = self.read_distance_sensor()?;
-                    println!("Dist: {:.1}", dist);
-                    if dist > limit { far += 1; }
-                }
-                println!("Far: {}", far);
-                let should_go_right = if far >= 2 {
-                    println!("No obstacle.");
-                    check_right
+                let predetermined_path = predetermined_path.next();
+                let should_go_right = if let Some(path) = // only Some(...) if fast mode is enabled
+                    if let Some(p) = predetermined_path {
+                        if p.1 { Some(p)
+                        } else { None }
+                    } else { None }
+                {
+                    path.0
                 } else {
-                    println!("OBSTACLE!");
-                    !check_right
+                    _ = self.send_to_linienfolger.send(LfTask::Pause(None));
+                    let check_right = match lane {
+                        Lane::Left => true,
+                        Lane::Center => false,
+                        Lane::Right => false,
+                    };
+                    const ANGLE: f32 = 30.0;
+                    const ANGLE_CHANGE: f32 = 4.0;
+                    self.set_sensor_angle(if check_right { ANGLE } else { -ANGLE })?;
+                    std::thread::sleep(Duration::from_secs_f64(1.0));
+                    let mut far = 0;
+                    let limit = 72.5;
+                    for i in 0..4 {
+                        let angle = ANGLE + i as f32 * ANGLE_CHANGE;
+                        self.set_sensor_angle(if check_right { angle } else { -angle })?;
+                        std::thread::sleep(Duration::from_secs_f64(1.0));
+                        let dist = self.read_distance_sensor()?;
+                        println!("Dist: {:.1}", dist);
+                        if dist > limit { far += 1; }
+                    }
+                    println!("Far: {}", far);
+                    let should_go_right = if far >= 2 {
+                        println!("No obstacle.");
+                        check_right
+                    } else {
+                        println!("OBSTACLE!");
+                        !check_right
+                    };
+                    self.set_sensor_angle(0.0)?;
+                    // self.set_sensor_angle(if should_go_right { -90.0 } else { 90.0 })?; // look towards the obstacle that was in front of us before (so we know when it has passed)
+                    println!("We should probably go {}.", if should_go_right { "right" } else { "left" });
+                    if let Some(path) = predetermined_path {
+                        path.0
+                    } else {
+                        should_go_right
+                    }
                 };
-                self.set_sensor_angle(0.0)?;
-                // self.set_sensor_angle(if should_go_right { -90.0 } else { 90.0 })?; // look towards the obstacle that was in front of us before (so we know when it has passed)
-                println!("We should probably go {}.", if should_go_right { "right" } else { "left" });
                 let should_steer_right = if match lane {
                     Lane::Left => !should_go_right,
                     Lane::Right => should_go_right, // right + should go right => go very left instead

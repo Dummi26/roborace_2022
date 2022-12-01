@@ -154,6 +154,19 @@ impl Robot {
                     distance_obstacle: if let Some(v) = identifier_state.get("erkennung distance obstacle") {
                         match v.parse() { Ok(v) => v, Err(e) => { println!("erkennung distance obstacle: failed to parse ({e}); [50.0]"); 50.0 } }
                     } else { println!("erkennung distance obstacle: [50.0]"); 50.0 },
+                    path: if let Some(v) = identifier_state.get("erkennung path") {
+                        let mut vec = Vec::new();
+                        for ch in v.chars() {
+                            match ch {
+                                'l' => vec.push((false, false)), // left slow
+                                'L' => vec.push((false, true)), // left fast
+                                'r' => vec.push((true, false)), // right slow
+                                'R' => vec.push((true, true)), // right fast
+                                _ => {},
+                            }
+                        }
+                        vec
+                    } else { println!("erkennung path: []"); vec![] },
                 },
             )
         };
