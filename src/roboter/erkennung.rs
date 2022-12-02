@@ -187,7 +187,7 @@ impl Thread {
                     std::thread::sleep(Duration::from_secs_f64(1.0));
                     let mut far = 0;
                     let limit = 72.5;
-                    for i in 0..4 {
+                    for i in 0..0 {
                         let angle = ANGLE + i as f32 * ANGLE_CHANGE;
                         self.set_sensor_angle(if check_right { angle } else { -angle })?;
                         std::thread::sleep(Duration::from_secs_f64(1.0));
@@ -222,7 +222,7 @@ impl Thread {
                     Some(should_go_right)
                 };
                 _ = self.send_to_linienfolger.send(LfTask::Pause(should_steer_right));
-                std::thread::sleep(Duration::from_secs_f64(0.5));
+                std::thread::sleep(Duration::from_secs_f64(0.5)); // NOTE: Maybe increase this for speed mode just to be safe?
                 _ = self.send_to_linienfolger.send(LfTask::SwitchToLane(match lane {
                     Lane::Left => if should_go_right { Lane::Center } else { Lane::Right },
                     Lane::Center => if should_go_right { Lane::Right } else { Lane::Left },

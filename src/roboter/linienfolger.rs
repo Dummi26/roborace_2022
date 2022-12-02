@@ -280,11 +280,11 @@ impl Thread {
         // return Err(StopReason::RequestedStop);
         // loop { thread::sleep(Duration::from_secs_f64(0.1)); println!("Angle: {}", self.read_gyro_sensor()?); }
         self.stop_motors();
-        std::thread::sleep(Duration::from_secs_f64(0.5));
-        #[cfg(not(feature="pc_test"))]
-        match self.sensor_gyro.set_mode_gyro_cal() { Ok(_) => (), Err(_) => return Err(StopReason::DeviceFailedToRespond(Device::GyroSensor)), };
-        #[cfg(not(feature="pc_test"))]
-        std::thread::sleep(Duration::from_secs_f64(2.5));
+        // std::thread::sleep(Duration::from_secs_f64(0.5));
+        // #[cfg(not(feature="pc_test"))]
+        // match self.sensor_gyro.set_mode_gyro_cal() { Ok(_) => (), Err(_) => return Err(StopReason::DeviceFailedToRespond(Device::GyroSensor)), };
+        // #[cfg(not(feature="pc_test"))]
+        // std::thread::sleep(Duration::from_secs_f64(2.5));
         #[cfg(not(feature="pc_test"))]
         match self.sensor_gyro.set_mode_gyro_ang() { Ok(_) => (), Err(_) => return Err(StopReason::DeviceFailedToRespond(Device::GyroSensor)), };
         std::thread::sleep(Duration::from_secs_f64(0.25));
@@ -570,6 +570,7 @@ impl Thread {
                                 near_edge_wait = self.wait_for_rotations(2.0); // TODO/NOTE: Change this value to one that works well
                                 speed_factor = 0.0;
                                 limit_angle = true;
+                                thread::sleep(Duration::from_secs_f64(0.25));
                             }
                             None
                         },
@@ -590,34 +591,40 @@ impl Thread {
                     if let Some(_) = self.old_state.take() {
                         switching_state = 0;
                         self.set_steering_angle(if *right { 30.0 } else { -30.0 })?;
-                        std::thread::sleep(Duration::from_secs_f64(0.75));
+                        std::thread::sleep(Duration::from_secs_f64(0.5));
                         self.set_speed(self.config.lane_switch_speed)?;
+                        std::thread::sleep(Duration::from_secs_f64(0.5));
                     }
                     match switching_state {
                         0 => {
                             if self.read_color_sensor()? <= self.config.brightness_entering_black_line {
                                 println!("center line");
+                                std::thread::sleep(Duration::from_secs_f64(0.15));
                                 switching_state += 1;
-                                self.set_steering_angle(if *right { -30.0 } else { 30.0 })?;
-                                self.set_steering_angle(0.0)?;
-                                std::thread::sleep(Duration::from_secs_f64(0.2));
                             }
                         },
                         1 => {
-                            if self.read_color_sensor()? <= self.config.brightness_entering_black_line {
-                                println!("final line");
+                            if self.read_color_sensor()? >= self.config.brightness_after_black_line {
+                                println!("center line gone");
+                                std::thread::sleep(Duration::from_secs_f64(0.15));
+                                self.set_steering_angle(0.0)?;
                                 switching_state += 1;
                             }
                         },
-                        _ => {
-                            new_state = Some(LinienfolgerState::Following(if *right { Lane::Right } else { Lane::Left }));
-                            near_edge = 0;
-                            near_edge_wait = self.wait_for_rotations(1.0); // TODO/NOTE: Change this value to one that works well
-                            speed_factor = 0.0;
-                            limit_angle = true;
-                            right_side_of_line_mode = *right;
-                            thread::sleep(Duration::from_secs_f64(1.0));
-                        }
+                        2 => {
+                            if self.read_color_sensor()? <= self.config.brightness_entering_black_line {
+                                println!("final line");
+                                switching_state += 1;
+                                new_state = Some(LinienfolgerState::Following(if *right { Lane::Right } else { Lane::Left }));
+                                near_edge = 0;
+                                near_edge_wait = self.wait_for_rotations(2.5); // TODO/NOTE: Change this value to one that works well
+                                speed_factor = 0.0;
+                                limit_angle = true;
+                                right_side_of_line_mode = *right;
+                                thread::sleep(Duration::from_secs_f64(0.2));
+                            }
+                        },
+                        _ => {},
                     }
                 },
             }
